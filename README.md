@@ -29,6 +29,8 @@ If those macros do not expand, the click routes to the configured public fallbac
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/coygg/meta-capi-gateway)
 
+If you are using the button above, skip the manual install instructions. Render reads `render.yaml` and walks you through the deploy.
+
 This repository includes `Dockerfile` and `render.yaml` for Render Blueprint deploys. The Blueprint:
 
 - Builds the PHP app from Docker.
@@ -58,14 +60,37 @@ https://YOUR-RENDER-SERVICE.onrender.com/admin/setup
 
 If you later attach a custom domain, set `APP_BASE_URL` to that custom URL in Render's environment settings so generated fallback/demo URLs use the custom host.
 
-## Install
+### What The Wizard Handles
+
+Render handles these from the Blueprint:
+
+- Docker build and start command.
+- Persistent SQLite disk.
+- `DB_PATH`.
+- `COOKIE_SECURE=true`.
+- `TRUST_PROXY=true`.
+- `CAPI_DRY_RUN=false`.
+- Generated `APP_SECRET`.
+- Generated `INTAKE_WEBHOOK_SECRET`.
+- Prompted `META_PIXEL_ID`.
+- Prompted `META_ACCESS_TOKEN`.
+
+The deployer still needs to do these outside Render:
+
+- Create the first admin password at `/admin/setup`.
+- Add domains and campaigns in `/admin`.
+- Add DNS records for custom tracking domains.
+- Configure the telehealth platform to store `sid` and call the webhook.
+- Copy the generated webhook secret from Render into the telehealth platform.
+
+## Local Install
 
 ```bash
 cp .env.example .env
 php -S 127.0.0.1:8080 -t public
 ```
 
-For production, point Nginx/Apache at `public/index.php`, set HTTPS, and set:
+For manual self-hosted production, point Nginx/Apache at `public/index.php`, set HTTPS, and set:
 
 ```text
 COOKIE_SECURE=true

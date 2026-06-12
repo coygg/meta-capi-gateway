@@ -1,0 +1,15 @@
+{
+  "name": "local/meta-capi-gateway",
+  "description": "First-party PHP click gateway for CAPI-only Meta attribution.",
+  "type": "project",
+  "require": {
+    "php": ">=8.2",
+    "ext-pdo": "*",
+    "ext-json": "*"
+  },
+  "scripts": {
+    "test": "php tests/run.php",
+    "test:coverage": "php -d pcov.enabled=1 -d pcov.directory=. tests/run.php --coverage",
+    "serve": "php -S 127.0.0.1:8080 -t public"
+  }
+}

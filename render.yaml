@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: meta-capi-gateway
+    runtime: docker
+    plan: starter
+    region: oregon
+    autoDeployTrigger: 'off'
+    healthCheckPath: /health
+    disk:
+      name: gateway-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_SECRET
+        generateValue: true
+      - key: DB_PATH
+        value: /var/data/gateway.sqlite
+      - key: GATEWAY_CNAME_TARGET
+        value: ''
+      - key: COOKIE_SECURE
+        value: true
+      - key: TRUST_PROXY
+        value: true
+      - key: CAPI_DRY_RUN
+        value: false
+      - key: META_PIXEL_ID
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_GRAPH_VERSION
+        value: v20.0
+      - key: META_GRAPH_BASE_URL
+        value: https://graph.facebook.com
+      - key: META_HTTP_TRANSPORT
+        value: auto
+      - key: META_TEST_EVENT_CODE
+        value: ''
+      - key: INTAKE_WEBHOOK_SECRET
+        generateValue: true

@@ -1,0 +1,7 @@
+.env
+.git
+.gitignore
+storage/*.sqlite
+storage/*.sqlite-*
+tests/.runtime/
+vendor/

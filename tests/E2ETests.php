@@ -330,8 +330,19 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $test->assertSame(302, $start['status'], 'start endpoint redirects to telehealth platform');
         $formLocation = header_value($start, 'location');
         $test->assertContains($telehealthBase . '/intake/start', $formLocation, 'form redirect points to mock telehealth');
-        $sid = query_params($formLocation)['sid'] ?? '';
+        $formParams = query_params($formLocation);
+        $sid = $formParams['sid'] ?? '';
         $test->assertTrue($sid !== '', 'form redirect includes signed sid');
+        $test->assertSame($cid, $formParams['cid'] ?? null, 'form redirect keeps signed cid for hosted form attribution');
+        $test->assertSame($cid, $formParams['gateway_cid'] ?? null, 'form redirect includes gateway_cid alias');
+        $test->assertSame('fbclid-123', $formParams['fbclid'] ?? null, 'form redirect forwards fbclid');
+        $test->assertSame('ad-123', $formParams['ad_id'] ?? null, 'form redirect forwards ad id');
+        $test->assertSame('set-456', $formParams['adset_id'] ?? null, 'form redirect forwards ad set id');
+        $test->assertSame('camp-789', $formParams['campaign_id'] ?? null, 'form redirect forwards Meta campaign id');
+        $test->assertSame('facebook', $formParams['utm_source'] ?? null, 'form redirect forwards UTM source');
+        $test->assertSame('paid_social', $formParams['utm_medium'] ?? null, 'form redirect forwards UTM medium');
+        $test->assertSame('demo', $formParams['utm_campaign'] ?? null, 'form redirect forwards UTM campaign');
+        $test->assertSame('ad', $formParams['utm_content'] ?? null, 'form redirect forwards UTM content');
 
         $telehealthStart = http_request('GET', $formLocation);
         $test->assertSame(200, $telehealthStart['status'], 'mock telehealth captures sid');
@@ -436,6 +447,61 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $metaAfterCustom = read_jsonl($metaLog);
         $customEvent = $metaAfterCustom[3]['json']['data'][0] ?? [];
         $test->assertSame('generic-intake', $customEvent['custom_data']['content_name'] ?? null, 'configured custom_data is included when present');
+
+        $remedoraPayload = [
+            'event' => ['id' => 'remedora-nested-event'],
+            'session' => ['id' => 'remedora-session-1'],
+            'metadata' => ['sid' => $sid],
+            'page_url' => 'https://try.remedora.com/f/reta-form?sid=' . rawurlencode($sid) . '&cid=' . rawurlencode($cid),
+        ];
+        $remedoraWebhook = http_request(
+            'POST',
+            $gatewayBase . '/capi/intake-completed',
+            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
+            json_encode($remedoraPayload, JSON_UNESCAPED_SLASHES)
+        );
+        $test->assertSame(200, $remedoraWebhook['status'], 'webhook accepts Remedora-style nested metadata');
+        $metaAfterRemedora = read_jsonl($metaLog);
+        $remedoraEvent = $metaAfterRemedora[4]['json']['data'][0] ?? [];
+        $test->assertSame('remedora-nested-event', $remedoraEvent['event_id'] ?? null, 'nested event id is used for idempotency');
+
+        $remedoraDuplicate = http_request(
+            'POST',
+            $gatewayBase . '/capi/intake-completed',
+            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
+            json_encode($remedoraPayload, JSON_UNESCAPED_SLASHES)
+        );
+        $remedoraDuplicatePayload = json_decode($remedoraDuplicate['body'], true) ?: [];
+        $test->assertSame(true, $remedoraDuplicatePayload['duplicate'] ?? false, 'nested Remedora-style webhook is idempotent');
+        $test->assertSame(5, count(read_jsonl($metaLog)), 'nested duplicate does not send another CAPI request');
+
+        $urlOnlyWebhook = http_request(
+            'POST',
+            $gatewayBase . '/capi/intake-completed',
+            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
+            json_encode([
+                'sessionMeta' => ['session_id' => 'remedora-url-session'],
+                'page_url' => 'https://try.remedora.com/f/reta-form?sid=' . rawurlencode($sid) . '&cid=' . rawurlencode($cid),
+            ], JSON_UNESCAPED_SLASHES)
+        );
+        $test->assertSame(200, $urlOnlyWebhook['status'], 'webhook can recover sid from captured form URL');
+        $metaAfterUrlOnly = read_jsonl($metaLog);
+        $urlOnlyEvent = $metaAfterUrlOnly[5]['json']['data'][0] ?? [];
+        $test->assertSame('remedora-url-session', $urlOnlyEvent['event_id'] ?? null, 'nested session id can drive event id');
+
+        $clickOnlyWebhook = http_request(
+            'POST',
+            $gatewayBase . '/capi/intake-completed',
+            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
+            json_encode([
+                'submission_id' => 'remedora-click-url',
+                'resume_url' => 'https://try.remedora.com/f/reta-form?cid=' . rawurlencode($cid),
+            ], JSON_UNESCAPED_SLASHES)
+        );
+        $test->assertSame(200, $clickOnlyWebhook['status'], 'webhook can recover cid from captured form URL');
+        $metaAfterClickOnly = read_jsonl($metaLog);
+        $clickOnlyEvent = $metaAfterClickOnly[6]['json']['data'][0] ?? [];
+        $test->assertSame('remedora-click-url', $clickOnlyEvent['event_id'] ?? null, 'submission id can drive event id');
 
         $fallback = http_request('GET', $gatewayBase . '/c/weight-intake?ad_id=%7B%7Bad.id%7D%7D&adset_id=set-456&campaign_id=camp-789&utm_source=facebook');
         $test->assertSame(302, $fallback['status'], 'unexpanded macro click redirects');

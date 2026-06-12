@@ -313,6 +313,60 @@ function run_unit_tests(TestHarness $test, string $root): void
     $_GET = $previousGet;
     $_COOKIE = $previousCookie;
 
+    $callAppPrivate = static function (App $app, string $method, mixed ...$args): mixed {
+        $reflection = new ReflectionMethod($app, $method);
+        $reflection->setAccessible(true);
+
+        return $reflection->invoke($app, ...$args);
+    };
+
+    $forwardParams = $callAppPrivate($fallbackConfigApp, 'formForwardParams', [
+        'form_token_param' => 'form_ref',
+    ], [
+        'fbclid' => 'unit-fbclid',
+        'ad_id' => 'unit-ad',
+        'adset_id' => 'unit-adset',
+        'meta_campaign_id' => 'unit-campaign',
+        'utm_source' => 'facebook',
+        'utm_medium' => 'paid_social',
+        'utm_campaign' => 'unit-demo',
+        'utm_content' => 'unit-ad-name',
+        'query_json' => '{"utm_term":"unit-keyword"}',
+    ], 'unit-click-token', 'unit-form-token');
+    $test->assertSame('unit-form-token', $forwardParams['form_ref'] ?? null, 'form redirect supports custom token param alias');
+    $test->assertSame('unit-form-token', $forwardParams['sid'] ?? null, 'form redirect always includes sid alias');
+    $test->assertSame('unit-click-token', $forwardParams['cid'] ?? null, 'form redirect includes click token fallback');
+    $test->assertSame('unit-keyword', $forwardParams['utm_term'] ?? null, 'form redirect can forward UTM term from raw query');
+
+    $nestedClickToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
+        'tracking' => 'not-an-array',
+        'metadata' => ['gateway_cid' => 'unit-click-token'],
+    ]);
+    $test->assertSame(['value' => 'unit-click-token', 'type' => 'click'], $nestedClickToken, 'webhook token can come from nested click metadata');
+
+    $nestedUrlToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
+        'tracking' => 'not-an-array',
+        'metadata' => [
+            'page_url' => 'https://try.remedora.com/f/reta-form?sid=unit-form-token',
+        ],
+    ]);
+    $test->assertSame(['value' => 'unit-form-token', 'type' => 'form'], $nestedUrlToken, 'webhook token can come from nested captured URL');
+
+    $noQueryToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
+        'url' => 'https://try.remedora.com/f/reta-form',
+    ]);
+    $test->assertSame(['value' => '', 'type' => 'form'], $noQueryToken, 'webhook token ignores URLs without query strings');
+
+    $randomEventId = $callAppPrivate($fallbackConfigApp, 'webhookEventId', [
+        'event' => 'not-an-array',
+    ]);
+    $test->assertSame(32, strlen($randomEventId), 'webhook event id falls back when no stable id is present');
+
+    $firstString = $callAppPrivate($fallbackConfigApp, 'firstStringFromKeys', [
+        'sid' => ['not-scalar'],
+    ], ['sid']);
+    $test->assertSame('', $firstString, 'string extraction ignores non-scalar values');
+
     $campaignRepo->seedFromConfig($config->campaigns());
     $_SESSION = ['admin_authenticated' => true];
     $seededDashboard = $emptyAdmin->handle('GET', '/admin');

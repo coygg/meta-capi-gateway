@@ -221,6 +221,58 @@ Content-Type: application/json
 
 Do not post diagnosis, treatment, medication, symptoms, answers, condition names, or page URLs containing sensitive information to this endpoint.
 
+## Hosted Remedora-Style Forms
+
+Hosted form platforms such as Remedora-style React/Inertia intake pages can work as long as they preserve query parameters or let you include webhook metadata.
+
+For a campaign using a hosted form URL like:
+
+```text
+https://try.remedora.com/f/reta-form
+```
+
+configure the campaign in `/admin` with:
+
+- `form_url` set to the hosted form URL.
+- `allowed_domains` including the hosted form host, for example `try.remedora.com`.
+- `form_token_param` set to `sid` unless the platform requires a different parameter name.
+
+When a valid visitor clicks **Start intake**, the gateway redirects to the hosted form with:
+
+- `sid`: signed form-session token.
+- `cid`: signed click token fallback.
+- `gateway_cid`: explicit click-token alias.
+- `fbclid`, `ad_id`, `adset_id`, `campaign_id`, and safe UTM fields when present on the original ad click.
+
+The hosted platform webhook should send back one of these:
+
+```json
+{
+  "sid": "signed-form-session-token",
+  "event_id": "stable-submission-or-session-id"
+}
+```
+
+or nested metadata:
+
+```json
+{
+  "event": { "id": "stable-submission-or-session-id" },
+  "metadata": { "sid": "signed-form-session-token" }
+}
+```
+
+or a captured form URL/referrer containing `sid` or `cid`:
+
+```json
+{
+  "submission_id": "stable-submission-or-session-id",
+  "page_url": "https://try.remedora.com/f/reta-form?sid=SIGNED_TOKEN"
+}
+```
+
+The gateway also accepts token fields under `tracking`, `metadata`, `meta`, `query`, `query_params`, `url_params`, `custom_fields`, `customFields`, `hidden_fields`, and `hiddenFields`. For idempotency, send a stable `event_id`, `submission_id`, `checkout_id`, `order_id`, `session_id`, or nested `event.id`/`session.id`. Without a stable event id, retries may be treated as new CAPI events.
+
 ## CAPI Payload
 
 The app sends only:

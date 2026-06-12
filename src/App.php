@@ -166,9 +166,10 @@ final class App
 
         $this->repository->createFormSession($sessionId, $clickId, $slug, $expiresAt);
 
-        $formUrl = Url::appendQuery((string) $campaign['form_url'], [
-            (string) ($campaign['form_token_param'] ?? 'sid') => $formToken,
-        ]);
+        $formUrl = Url::appendQuery(
+            (string) $campaign['form_url'],
+            $this->formForwardParams($campaign, $click, $tokenParam, $formToken)
+        );
 
         Url::assertAllowed($formUrl, $this->allowedDomains($campaign));
 
@@ -187,8 +188,8 @@ final class App
         }
 
         $input = $this->jsonInput();
-        $token = (string) ($input['sid'] ?? $input['cid'] ?? '');
-        $verification = $this->tokens->verify($token, isset($input['sid']) ? 'form' : 'click');
+        $token = $this->webhookToken($input);
+        $verification = $this->tokens->verify($token['value'], $token['type']);
 
         if (!$verification['valid']) {
             return Response::json(['error' => 'invalid_token', 'reason' => $verification['reason']], 400);
@@ -209,7 +210,7 @@ final class App
         }
 
         $eventName = (string) ($campaign['capi_event_name'] ?? 'Lead');
-        $eventId = (string) ($input['event_id'] ?? bin2hex(random_bytes(16)));
+        $eventId = $this->webhookEventId($input);
         $existingConversion = $this->repository->findConversion($eventId);
 
         if ($existingConversion !== null) {
@@ -267,6 +268,226 @@ final class App
             : '<p class="muted">The secure intake form opens from an eligible ad session.</p>';
 
         return Response::html($this->page($title, '<p>' . $body . '</p>' . $cta));
+    }
+
+    /**
+     * @param array<string, mixed> $campaign
+     * @param array<string, mixed> $click
+     * @return array<string, string>
+     */
+    private function formForwardParams(array $campaign, array $click, string $clickToken, string $formToken): array
+    {
+        $tokenKey = trim((string) ($campaign['form_token_param'] ?? 'sid')) ?: 'sid';
+        $params = [
+            'sid' => $formToken,
+            'cid' => $clickToken,
+            'gateway_cid' => $clickToken,
+            $tokenKey => $formToken,
+        ];
+
+        $forward = [
+            'fbclid' => $click['fbclid'] ?? '',
+            'ad_id' => $click['ad_id'] ?? '',
+            'adset_id' => $click['adset_id'] ?? '',
+            'campaign_id' => $click['meta_campaign_id'] ?? '',
+            'utm_source' => $click['utm_source'] ?? '',
+            'utm_medium' => $click['utm_medium'] ?? '',
+            'utm_campaign' => $click['utm_campaign'] ?? '',
+            'utm_content' => $click['utm_content'] ?? '',
+        ];
+
+        $query = $this->decodedClickQuery($click);
+        if (isset($query['utm_term']) && is_scalar($query['utm_term'])) {
+            $forward['utm_term'] = $query['utm_term'];
+        }
+
+        foreach ($forward as $key => $value) {
+            $value = is_scalar($value) ? trim((string) $value) : '';
+
+            if ($value !== '' && !isset($params[$key])) {
+                $params[$key] = $value;
+            }
+        }
+
+        return $params;
+    }
+
+    /**
+     * @param array<string, mixed> $click
+     * @return array<string, mixed>
+     */
+    private function decodedClickQuery(array $click): array
+    {
+        $decoded = json_decode((string) ($click['query_json'] ?? '{}'), true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param array<string, mixed> $input
+     * @return array{value: string, type: string}
+     */
+    private function webhookToken(array $input): array
+    {
+        $formKeys = ['sid', 'gateway_sid', 'form_session_token', 'form_token', 'attribution_sid'];
+        $clickKeys = ['cid', 'gateway_cid', 'click_token', 'attribution_cid'];
+        $containers = [
+            'tracking',
+            'metadata',
+            'meta',
+            'query',
+            'query_params',
+            'url_params',
+            'custom_fields',
+            'customFields',
+            'hidden_fields',
+            'hiddenFields',
+        ];
+
+        $token = $this->firstStringFromKeys($input, $formKeys);
+        if ($token !== '') {
+            return ['value' => $token, 'type' => 'form'];
+        }
+
+        $token = $this->firstStringFromKeys($input, $clickKeys);
+        if ($token !== '') {
+            return ['value' => $token, 'type' => 'click'];
+        }
+
+        foreach ($containers as $containerName) {
+            $container = $input[$containerName] ?? null;
+
+            if (!is_array($container)) {
+                continue;
+            }
+
+            $token = $this->firstStringFromKeys($container, $formKeys);
+            if ($token !== '') {
+                return ['value' => $token, 'type' => 'form'];
+            }
+
+            $token = $this->firstStringFromKeys($container, $clickKeys);
+            if ($token !== '') {
+                return ['value' => $token, 'type' => 'click'];
+            }
+        }
+
+        $token = $this->webhookTokenFromUrlFields($input, $formKeys, $clickKeys);
+        if ($token['value'] !== '') {
+            return $token;
+        }
+
+        foreach ($containers as $containerName) {
+            $container = $input[$containerName] ?? null;
+
+            if (!is_array($container)) {
+                continue;
+            }
+
+            $token = $this->webhookTokenFromUrlFields($container, $formKeys, $clickKeys);
+            if ($token['value'] !== '') {
+                return $token;
+            }
+        }
+
+        return ['value' => '', 'type' => 'form'];
+    }
+
+    /**
+     * @param array<string, mixed> $source
+     * @param list<string> $formKeys
+     * @param list<string> $clickKeys
+     * @return array{value: string, type: string}
+     */
+    private function webhookTokenFromUrlFields(array $source, array $formKeys, array $clickKeys): array
+    {
+        foreach (['url', 'page_url', 'landing_url', 'source_url', 'referrer', 'resume_url'] as $field) {
+            $url = $this->firstStringFromKeys($source, [$field]);
+
+            if ($url === '') {
+                continue;
+            }
+
+            $query = parse_url($url, PHP_URL_QUERY);
+            if (!is_string($query) || $query === '') {
+                continue;
+            }
+
+            parse_str($query, $params);
+
+            $token = $this->firstStringFromKeys($params, $formKeys);
+            if ($token !== '') {
+                return ['value' => $token, 'type' => 'form'];
+            }
+
+            $token = $this->firstStringFromKeys($params, $clickKeys);
+            if ($token !== '') {
+                return ['value' => $token, 'type' => 'click'];
+            }
+        }
+
+        return ['value' => '', 'type' => 'form'];
+    }
+
+    /**
+     * @param array<string, mixed> $input
+     */
+    private function webhookEventId(array $input): string
+    {
+        $keys = [
+            'event_id',
+            'eventId',
+            'submission_id',
+            'submissionId',
+            'checkout_id',
+            'checkoutId',
+            'order_id',
+            'orderId',
+            'session_id',
+            'sessionId',
+            'id',
+        ];
+
+        $eventId = $this->firstStringFromKeys($input, $keys);
+        if ($eventId !== '') {
+            return $eventId;
+        }
+
+        foreach (['event', 'submission', 'checkout', 'order', 'session', 'sessionMeta', 'session_meta'] as $containerName) {
+            $container = $input[$containerName] ?? null;
+
+            if (!is_array($container)) {
+                continue;
+            }
+
+            $eventId = $this->firstStringFromKeys($container, $keys);
+            if ($eventId !== '') {
+                return $eventId;
+            }
+        }
+
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * @param array<string, mixed> $source
+     * @param list<string> $keys
+     */
+    private function firstStringFromKeys(array $source, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $source) || !is_scalar($source[$key])) {
+                continue;
+            }
+
+            $value = trim((string) $source[$key]);
+
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     /**

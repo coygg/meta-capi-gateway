@@ -25,11 +25,20 @@ https://track.yourdomain.com/c/weight-intake?ad_id={{ad.id}}&adset_id={{adset.id
 
 If those macros do not expand, the click routes to the configured public fallback.
 
-## One-Click Deploy To Render
+## Deployment Options
+
+There are two ways to run this app:
+
+- **Recommended:** one-click Render deploy using the hosted wizard.
+- **Alternative:** manual local or self-hosted install.
+
+If you use Render, you do not need to copy `.env`, manually create the SQLite database, or set every environment variable yourself.
+
+## Recommended: One-Click Render Wizard
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/coygg/meta-capi-gateway)
 
-If you are using the button above, skip the manual install instructions. Render reads `render.yaml` and walks you through the deploy.
+Click the button above for the easiest setup. Render reads `render.yaml` and walks the deployer through a wizard.
 
 This repository includes `Dockerfile` and `render.yaml` for Render Blueprint deploys. The Blueprint:
 
@@ -40,12 +49,12 @@ This repository includes `Dockerfile` and `render.yaml` for Render Blueprint dep
 - Prompts for `META_PIXEL_ID` and `META_ACCESS_TOKEN`.
 - Uses Render's generated service URL automatically through `RENDER_EXTERNAL_URL`.
 
-Steps for a new deployer:
+### Render Wizard Steps
 
 1. Click **Deploy to Render**.
 2. Connect or sign in to Render.
 3. Enter `META_PIXEL_ID` and `META_ACCESS_TOKEN` when prompted.
-4. Keep the generated `APP_SECRET` and `INTAKE_WEBHOOK_SECRET`.
+4. Let Render generate `APP_SECRET` and `INTAKE_WEBHOOK_SECRET`.
 5. Wait for the first deploy to finish.
 6. Open:
 
@@ -58,15 +67,11 @@ https://YOUR-RENDER-SERVICE.onrender.com/admin/setup
 9. Copy the generated Meta ad URL into Meta Ads Manager.
 10. Configure the telehealth platform to preserve `sid` and send completed intake webhooks to `/capi/intake-completed` with `X-Webhook-Secret`.
 
-If you later attach a custom domain, set `APP_BASE_URL` to that custom URL in Render's environment settings so generated fallback/demo URLs use the custom host.
-
-### What The Wizard Handles
-
-Render handles these from the Blueprint:
+### What Render Handles
 
 - Docker build and start command.
 - Persistent SQLite disk.
-- `DB_PATH`.
+- `DB_PATH=/var/data/gateway.sqlite`.
 - `COOKIE_SECURE=true`.
 - `TRUST_PROXY=true`.
 - `CAPI_DRY_RUN=false`.
@@ -74,34 +79,67 @@ Render handles these from the Blueprint:
 - Generated `INTAKE_WEBHOOK_SECRET`.
 - Prompted `META_PIXEL_ID`.
 - Prompted `META_ACCESS_TOKEN`.
+- Health check at `/health`.
+- Public service URL through `RENDER_EXTERNAL_URL`.
 
-The deployer still needs to do these outside Render:
+### What The Deployer Still Does
 
 - Create the first admin password at `/admin/setup`.
 - Add domains and campaigns in `/admin`.
 - Add DNS records for custom tracking domains.
 - Configure the telehealth platform to store `sid` and call the webhook.
 - Copy the generated webhook secret from Render into the telehealth platform.
+- Optional: attach a custom domain in Render.
 
-## Local Install
+If you attach a custom domain, set `APP_BASE_URL` to that custom URL in Render's environment settings so generated fallback/demo URLs use the custom host.
+
+## Alternative: Manual Local Install
+
+Use this path only for development or self-hosting outside Render.
 
 ```bash
 cp .env.example .env
 php -S 127.0.0.1:8080 -t public
 ```
 
+Edit `.env` for local testing:
+
+```text
+APP_ENV=local
+APP_BASE_URL=http://127.0.0.1:8080
+APP_SECRET=<long random secret>
+DB_PATH=storage/gateway.sqlite
+COOKIE_SECURE=false
+CAPI_DRY_RUN=true
+INTAKE_WEBHOOK_SECRET=<long random secret>
+```
+
+## Alternative: Manual Production Hosting
+
+Use this path only if you are deploying to your own server instead of Render.
+
 For manual self-hosted production, point Nginx/Apache at `public/index.php`, set HTTPS, and set:
 
 ```text
+APP_ENV=production
+APP_BASE_URL=https://track.yourdomain.com
 COOKIE_SECURE=true
 APP_SECRET=<long random secret>
 INTAKE_WEBHOOK_SECRET=<long random secret>
 CAPI_DRY_RUN=false
 META_PIXEL_ID=<your pixel/dataset id>
 META_ACCESS_TOKEN=<your access token>
+DB_PATH=/secure/persistent/path/gateway.sqlite
 ```
 
-## First Run Admin Portal
+Manual production hosting also needs:
+
+- Persistent storage for SQLite.
+- HTTPS and proxy headers configured correctly.
+- Backups for the SQLite database.
+- A process manager such as systemd, Supervisor, or your platform's service runner.
+
+## After Any Deployment: First Run Admin Portal
 
 After deploy, open:
 

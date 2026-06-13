@@ -1,0 +1,36 @@
+services:
+  gateway:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_BASE_URL: https://${GATEWAY_DOMAIN:?Set GATEWAY_DOMAIN in .env}
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env}
+      DB_PATH: /var/data/gateway.sqlite
+      COOKIE_SECURE: "true"
+      TRUST_PROXY: "true"
+      GATEWAY_CNAME_TARGET: ${GATEWAY_CNAME_TARGET:-}
+    volumes:
+      - gateway-data:/var/data
+    expose:
+      - "10000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN:?Set GATEWAY_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  gateway-data:
+  caddy-data:
+  caddy-config:

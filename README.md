@@ -4,6 +4,18 @@ PHP 8.2+ gateway for Remedora-style Meta ad funnels. It protects the downstream 
 
 This app does **not** send CAPI events to Meta. Keep Remedora's built-in CAPI enabled and let Remedora send conversions directly.
 
+## Gateway CAPI Removed
+
+There is no gateway-side Meta CAPI setup anymore:
+
+- No Meta pixel/dataset ID is required.
+- No Meta access token is required.
+- No intake webhook secret is required.
+- No `/capi/intake-completed` integration is required.
+- Remedora remains the conversion sender through its own direct Meta CAPI connection.
+
+The gateway only protects routing and preserves attribution parameters until the visitor reaches Remedora.
+
 ## What It Does
 
 - Gives Meta ads a first-party tracking URL like `/c/weight-intake`.
@@ -53,7 +65,7 @@ After deploy:
 3. Create the first admin password.
 4. Follow the quick setup walkthrough shown at the top of the admin dashboard.
 5. Add a tracking domain, such as `track.yourdomain.com`.
-6. Point that domain's CNAME to the portal's displayed target.
+6. Point DNS at the portal's displayed target.
 7. Click **Verify** in the domain table.
 8. Create or edit a campaign.
 9. Set the static lander URL, Remedora form URL, and public fallback URL.
@@ -73,7 +85,49 @@ If your deploy platform provides a wizard, it can prefill almost everything from
 
 The wizard does not need to ask users for Meta credentials. Domains and campaigns are configured later in `/admin`.
 
-## Manual Setup
+## HTTPS / SSL
+
+Render and most one-click platforms terminate HTTPS for you. For self-hosting, the easiest HTTPS setup is the included Caddy reverse proxy. Caddy automatically requests and renews Let's Encrypt certificates.
+
+Requirements:
+
+- A public server with Docker Compose.
+- DNS for `track.yourdomain.com` pointing to that server.
+- Ports `80` and `443` open to the internet.
+
+Self-host with automatic HTTPS:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+APP_ENV=production
+APP_SECRET=<at least 32 random characters>
+GATEWAY_DOMAIN=track.yourdomain.com
+COOKIE_SECURE=true
+TRUST_PROXY=true
+```
+
+Start the app and HTTPS proxy:
+
+```bash
+docker compose -f docker-compose.https.yml up -d --build
+```
+
+Then open:
+
+```text
+https://track.yourdomain.com/admin
+```
+
+Caddy stores certificates in the `caddy-data` Docker volume and SQLite data in the `gateway-data` Docker volume.
+
+## Local Manual Setup
+
+Use this for local development without HTTPS:
 
 ```bash
 composer install
@@ -81,7 +135,7 @@ cp .env.example .env # optional if you create one
 composer serve
 ```
 
-Minimum environment:
+Minimum production-style environment when not using the HTTPS compose file:
 
 ```env
 APP_ENV=production
@@ -134,15 +188,22 @@ Remedora receives those query params, stores its own attribution context, and se
 
 ## DNS
 
-Add the tracking hostname in `/admin`, then create a CNAME record with your DNS provider.
+Add the tracking hostname in `/admin`, then create the matching DNS record with your DNS provider.
 
-Example:
+For Render or another managed platform, use the platform's custom-domain instructions. This is usually a CNAME:
 
 ```text
 track.yourdomain.com CNAME your-render-or-platform-target
 ```
 
-The admin portal shows the expected CNAME target and has a **Verify** action. Once verified, generated ad URLs use the active tracking domain automatically.
+For the self-hosted Caddy setup, point the gateway hostname directly at the server:
+
+```text
+track.yourdomain.com A 203.0.113.10
+track.yourdomain.com AAAA 2001:db8::10
+```
+
+Use `AAAA` only when your server has IPv6. The admin portal shows the expected DNS target and has a **Verify** action. Once verified, generated ad URLs use the active tracking domain automatically.
 
 ## Tests
 

@@ -220,11 +220,11 @@ final class AdminController
         $body = $flash
             . $this->walkthrough()
             . '<section><h2>Domains</h2>'
-            . '<p>Add a tracking domain, then point its CNAME to <code>' . $this->e($target) . '</code>.</p>'
+            . '<p>Add a tracking domain, then point DNS to <code>' . $this->e($target) . '</code>. Use a CNAME for aliases, or an A/AAAA record when this host points directly at your HTTPS server.</p>'
             . '<form method="post" action="/admin/domains" class="inline">' . $this->csrfField()
             . '<input name="hostname" placeholder="track.example.com" required>'
             . '<button type="submit">Add domain</button></form>'
-            . '<table><thead><tr><th>Hostname</th><th>Status</th><th>CNAME target</th><th>Last check</th><th></th></tr></thead><tbody>' . $domainRows . '</tbody></table></section>'
+            . '<table><thead><tr><th>Hostname</th><th>Status</th><th>DNS target</th><th>Last check</th><th></th></tr></thead><tbody>' . $domainRows . '</tbody></table></section>'
             . '<section><div class="split"><h2>Campaigns</h2><a class="button" href="/admin/campaigns/new">New campaign</a></div>'
             . '<table><thead><tr><th>Slug</th><th>Status</th><th>Meta ad URL</th><th></th></tr></thead><tbody>' . $campaignRows . '</tbody></table></section>'
             . '<form method="post" action="/admin/logout">' . $this->csrfField() . '<button type="submit" class="link">Log out</button></form>';
@@ -389,8 +389,9 @@ final class AdminController
             . '<form method="post" action="/admin/walkthrough/dismiss">' . $this->csrfField()
             . '<button type="submit" class="secondary">Dismiss</button></form></div>'
             . '<ol class="steps">'
-            . '<li><strong>Add a tracking domain.</strong> Use a host like <code>track.yourdomain.com</code>, then point its CNAME to the target shown below.</li>'
-            . '<li><strong>Verify DNS.</strong> Click Verify after the CNAME is live so generated ad URLs use the tracking domain automatically.</li>'
+            . '<li><strong>Add a tracking domain.</strong> Use the HTTPS host visitors will click, such as <code>track.yourdomain.com</code>.</li>'
+            . '<li><strong>Point DNS.</strong> Use a CNAME for platform aliases, or an A/AAAA record when self-hosting this exact domain with Caddy.</li>'
+            . '<li><strong>Verify DNS.</strong> Click Verify after DNS is live so generated ad URLs use the tracking domain automatically.</li>'
             . '<li><strong>Create a campaign.</strong> Enter the static lander URL, Remedora form URL, public fallback URL, and allowed redirect domains.</li>'
             . '<li><strong>Copy the Meta ad URL.</strong> Paste the generated URL into Meta so ad clicks arrive with expanded ad IDs, UTMs, and <code>fbclid</code>.</li>'
             . '<li><strong>Keep Remedora CAPI on.</strong> This gateway only preserves attribution; Remedora sends conversion events directly to Meta.</li>'

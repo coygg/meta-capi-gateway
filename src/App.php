@@ -181,13 +181,13 @@ final class App
     private function recordIntakeCompleted(): Response
     {
         $configuredSecret = $this->config->string('intake_webhook_secret');
-        $providedSecret = (string) ($_SERVER['HTTP_X_WEBHOOK_SECRET'] ?? '');
+        $rawInput = file_get_contents('php://input') ?: '';
 
-        if ($configuredSecret === '' || !hash_equals($configuredSecret, $providedSecret)) {
+        if (!$this->webhookAuthorized($configuredSecret, $rawInput)) {
             return Response::json(['error' => 'unauthorized'], 401);
         }
 
-        $input = $this->jsonInput();
+        $input = $this->jsonInput($rawInput);
         $token = $this->webhookToken($input);
         $verification = $this->tokens->verify($token['value'], $token['type']);
 
@@ -325,13 +325,12 @@ final class App
 
     /**
      * @param array<string, mixed> $input
-     * @return array{value: string, type: string}
+     * @return list<array<string, mixed>>
      */
-    private function webhookToken(array $input): array
+    private function webhookContainerCandidates(array $input): array
     {
-        $formKeys = ['sid', 'gateway_sid', 'form_session_token', 'form_token', 'attribution_sid'];
-        $clickKeys = ['cid', 'gateway_cid', 'click_token', 'attribution_cid'];
-        $containers = [
+        $containers = [];
+        $names = [
             'tracking',
             'metadata',
             'meta',
@@ -342,7 +341,39 @@ final class App
             'customFields',
             'hidden_fields',
             'hiddenFields',
+            'data',
         ];
+
+        foreach ($names as $name) {
+            $container = $input[$name] ?? null;
+
+            if (is_array($container)) {
+                $containers[] = $container;
+            }
+        }
+
+        $data = $input['data'] ?? null;
+        if (is_array($data)) {
+            foreach (['session', 'attribution', 'tracking', 'metadata', 'meta', 'query', 'custom_fields', 'hidden_fields'] as $name) {
+                $container = $data[$name] ?? null;
+
+                if (is_array($container)) {
+                    $containers[] = $container;
+                }
+            }
+        }
+
+        return $containers;
+    }
+
+    /**
+     * @param array<string, mixed> $input
+     * @return array{value: string, type: string}
+     */
+    private function webhookToken(array $input): array
+    {
+        $formKeys = ['sid', 'gateway_sid', 'form_session_token', 'form_token', 'attribution_sid'];
+        $clickKeys = ['cid', 'gateway_cid', 'click_token', 'attribution_cid'];
 
         $token = $this->firstStringFromKeys($input, $formKeys);
         if ($token !== '') {
@@ -354,13 +385,7 @@ final class App
             return ['value' => $token, 'type' => 'click'];
         }
 
-        foreach ($containers as $containerName) {
-            $container = $input[$containerName] ?? null;
-
-            if (!is_array($container)) {
-                continue;
-            }
-
+        foreach ($this->webhookContainerCandidates($input) as $container) {
             $token = $this->firstStringFromKeys($container, $formKeys);
             if ($token !== '') {
                 return ['value' => $token, 'type' => 'form'];
@@ -372,22 +397,73 @@ final class App
             }
         }
 
+        $token = $this->webhookTokenFromQueryPairs($input, $formKeys, $clickKeys);
+        if ($token['value'] !== '') {
+            return $token;
+        }
+
+        foreach ($this->webhookContainerCandidates($input) as $container) {
+            $token = $this->webhookTokenFromQueryPairs($container, $formKeys, $clickKeys);
+            if ($token['value'] !== '') {
+                return $token;
+            }
+        }
+
         $token = $this->webhookTokenFromUrlFields($input, $formKeys, $clickKeys);
         if ($token['value'] !== '') {
             return $token;
         }
 
-        foreach ($containers as $containerName) {
-            $container = $input[$containerName] ?? null;
-
-            if (!is_array($container)) {
-                continue;
-            }
-
+        foreach ($this->webhookContainerCandidates($input) as $container) {
             $token = $this->webhookTokenFromUrlFields($container, $formKeys, $clickKeys);
             if ($token['value'] !== '') {
                 return $token;
             }
+        }
+
+        return ['value' => '', 'type' => 'form'];
+    }
+
+    /**
+     * @param array<string, mixed> $source
+     * @param list<string> $formKeys
+     * @param list<string> $clickKeys
+     * @return array{value: string, type: string}
+     */
+    private function webhookTokenFromQueryPairs(array $source, array $formKeys, array $clickKeys): array
+    {
+        $pairs = $source['query_params'] ?? $source['queryParams'] ?? null;
+
+        if (!is_array($pairs)) {
+            return ['value' => '', 'type' => 'form'];
+        }
+
+        $params = [];
+        foreach ($pairs as $key => $pair) {
+            if (is_array($pair)) {
+                $pairKey = $this->firstStringFromKeys($pair, ['key', 'name']);
+                $pairValue = $this->firstStringFromKeys($pair, ['value']);
+
+                if ($pairKey !== '' && $pairValue !== '') {
+                    $params[$pairKey] = $pairValue;
+                }
+
+                continue;
+            }
+
+            if (is_scalar($pair)) {
+                $params[(string) $key] = (string) $pair;
+            }
+        }
+
+        $token = $this->firstStringFromKeys($params, $formKeys);
+        if ($token !== '') {
+            return ['value' => $token, 'type' => 'form'];
+        }
+
+        $token = $this->firstStringFromKeys($params, $clickKeys);
+        if ($token !== '') {
+            return ['value' => $token, 'type' => 'click'];
         }
 
         return ['value' => '', 'type' => 'form'];
@@ -453,7 +529,15 @@ final class App
             return $eventId;
         }
 
-        foreach (['event', 'submission', 'checkout', 'order', 'session', 'sessionMeta', 'session_meta'] as $containerName) {
+        $eventId = $this->firstStringAtPath($input, ['meta', 'delivery_id'])
+            ?: $this->firstStringAtPath($input, ['data', 'session', 'reference'])
+            ?: $this->firstStringAtPath($input, ['data', 'session', 'id']);
+
+        if ($eventId !== '') {
+            return $eventId;
+        }
+
+        foreach (['event', 'submission', 'checkout', 'order', 'session', 'sessionMeta', 'session_meta', 'data', 'meta'] as $containerName) {
             $container = $input[$containerName] ?? null;
 
             if (!is_array($container)) {
@@ -467,6 +551,25 @@ final class App
         }
 
         return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * @param array<string, mixed> $source
+     * @param list<string> $path
+     */
+    private function firstStringAtPath(array $source, array $path): string
+    {
+        $current = $source;
+
+        foreach ($path as $segment) {
+            if (!is_array($current) || !array_key_exists($segment, $current)) {
+                return '';
+            }
+
+            $current = $current[$segment];
+        }
+
+        return is_scalar($current) ? trim((string) $current) : '';
     }
 
     /**
@@ -659,9 +762,9 @@ final class App
     /**
      * @return array<string, mixed>
      */
-    private function jsonInput(): array
+    private function jsonInput(?string $raw = null): array
     {
-        $raw = file_get_contents('php://input') ?: '';
+        $raw ??= file_get_contents('php://input') ?: '';
         $decoded = json_decode($raw, true);
 
         if (!is_array($decoded)) {
@@ -669,6 +772,34 @@ final class App
         }
 
         return $decoded;
+    }
+
+    private function webhookAuthorized(string $configuredSecret, string $rawInput): bool
+    {
+        if ($configuredSecret === '') {
+            return false;
+        }
+
+        $providedSecret = (string) ($_SERVER['HTTP_X_WEBHOOK_SECRET'] ?? '');
+        if ($providedSecret !== '' && hash_equals($configuredSecret, $providedSecret)) {
+            return true;
+        }
+
+        $timestamp = trim((string) ($_SERVER['HTTP_X_REMEDORA_TIMESTAMP'] ?? ''));
+        $signature = trim((string) ($_SERVER['HTTP_X_REMEDORA_SIGNATURE'] ?? ''));
+
+        if ($timestamp === '' || $signature === '') {
+            return false;
+        }
+
+        $timestampSeconds = strtotime($timestamp);
+        if ($timestampSeconds === false || abs(time() - $timestampSeconds) > 15 * 60) {
+            return false;
+        }
+
+        $expected = 'sha256=' . hash_hmac('sha256', $timestamp . '.' . $rawInput, $configuredSecret);
+
+        return hash_equals($expected, $signature);
     }
 
     private function page(string $title, string $content): string

@@ -503,6 +503,76 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $clickOnlyEvent = $metaAfterClickOnly[6]['json']['data'][0] ?? [];
         $test->assertSame('remedora-click-url', $clickOnlyEvent['event_id'] ?? null, 'submission id can drive event id');
 
+        $remedoraNativePayload = [
+            'api_version' => '2026-04-08',
+            'event' => 'checkout.completed',
+            'occurred_at' => gmdate('c'),
+            'is_test' => false,
+            'meta' => [
+                'delivery_id' => 'remedora-delivery-1',
+                'safe_fields_only' => true,
+            ],
+            'data' => [
+                'session' => [
+                    'reference' => 'remedora-session-reference',
+                    'resume_url' => 'https://try.remedora.com/resume/remedora-session-reference',
+                ],
+                'attribution' => [
+                    'query_params' => [
+                        ['key' => 'utm_source', 'value' => 'facebook'],
+                        ['key' => 'sid', 'value' => $sid],
+                        ['key' => 'cid', 'value' => $cid],
+                    ],
+                ],
+            ],
+        ];
+        $remedoraNativeBody = json_encode($remedoraNativePayload, JSON_UNESCAPED_SLASHES) ?: '{}';
+        $remedoraTimestamp = gmdate('c');
+        $remedoraSignature = 'sha256=' . hash_hmac('sha256', $remedoraTimestamp . '.' . $remedoraNativeBody, $webhookSecret);
+        $badRemedoraSignature = http_request(
+            'POST',
+            $gatewayBase . '/capi/intake-completed',
+            [
+                'Content-Type' => 'application/json',
+                'X-Remedora-Event' => 'checkout.completed',
+                'X-Remedora-Signature' => 'sha256=bad',
+                'X-Remedora-Timestamp' => $remedoraTimestamp,
+            ],
+            $remedoraNativeBody
+        );
+        $test->assertSame(401, $badRemedoraSignature['status'], 'webhook rejects bad Remedora signature');
+
+        $remedoraNativeWebhook = http_request(
+            'POST',
+            $gatewayBase . '/capi/intake-completed',
+            [
+                'Content-Type' => 'application/json',
+                'X-Remedora-Event' => 'checkout.completed',
+                'X-Remedora-Signature' => $remedoraSignature,
+                'X-Remedora-Timestamp' => $remedoraTimestamp,
+            ],
+            $remedoraNativeBody
+        );
+        $test->assertSame(200, $remedoraNativeWebhook['status'], 'webhook accepts native Remedora signed payload');
+        $metaAfterNativeRemedora = read_jsonl($metaLog);
+        $nativeRemedoraEvent = $metaAfterNativeRemedora[7]['json']['data'][0] ?? [];
+        $test->assertSame('remedora-delivery-1', $nativeRemedoraEvent['event_id'] ?? null, 'Remedora delivery id drives CAPI idempotency');
+
+        $remedoraNativeDuplicate = http_request(
+            'POST',
+            $gatewayBase . '/capi/intake-completed',
+            [
+                'Content-Type' => 'application/json',
+                'X-Remedora-Event' => 'checkout.completed',
+                'X-Remedora-Signature' => $remedoraSignature,
+                'X-Remedora-Timestamp' => $remedoraTimestamp,
+            ],
+            $remedoraNativeBody
+        );
+        $remedoraNativeDuplicatePayload = json_decode($remedoraNativeDuplicate['body'], true) ?: [];
+        $test->assertSame(true, $remedoraNativeDuplicatePayload['duplicate'] ?? false, 'native Remedora duplicate is idempotent');
+        $test->assertSame(8, count(read_jsonl($metaLog)), 'native Remedora duplicate does not send another CAPI request');
+
         $fallback = http_request('GET', $gatewayBase . '/c/weight-intake?ad_id=%7B%7Bad.id%7D%7D&adset_id=set-456&campaign_id=camp-789&utm_source=facebook');
         $test->assertSame(302, $fallback['status'], 'unexpanded macro click redirects');
         $test->assertContains('/fallback/weight-intake', header_value($fallback, 'location'), 'unexpanded macro goes to public fallback');

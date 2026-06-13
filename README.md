@@ -273,6 +273,27 @@ or a captured form URL/referrer containing `sid` or `cid`:
 
 The gateway also accepts token fields under `tracking`, `metadata`, `meta`, `query`, `query_params`, `url_params`, `custom_fields`, `customFields`, `hidden_fields`, and `hiddenFields`. For idempotency, send a stable `event_id`, `submission_id`, `checkout_id`, `order_id`, `session_id`, or nested `event.id`/`session.id`. Without a stable event id, retries may be treated as new CAPI events.
 
+### Native Remedora Webhooks
+
+Remedora outbound webhooks can be pointed directly at:
+
+```text
+https://track.yourdomain.com/capi/intake-completed
+```
+
+Use the same value for the Remedora webhook signing secret and this app's `INTAKE_WEBHOOK_SECRET`. The gateway accepts either:
+
+- `X-Webhook-Secret: ...` for simple webhook tools.
+- Remedora's signed headers: `X-Remedora-Timestamp` plus `X-Remedora-Signature`.
+
+Native Remedora payloads are supported when the original form visit included `sid` or `cid`, because Remedora stores inbound query params and sends them back under:
+
+```text
+data.attribution.query_params
+```
+
+For duplicate protection, the gateway uses Remedora's `meta.delivery_id` when present.
+
 ## CAPI Payload
 
 The app sends only:

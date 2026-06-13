@@ -352,6 +352,21 @@ function run_unit_tests(TestHarness $test, string $root): void
     ]);
     $test->assertSame(['value' => 'unit-form-token', 'type' => 'form'], $nestedUrlToken, 'webhook token can come from nested captured URL');
 
+    $topLevelQueryPairToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
+        'queryParams' => [
+            'cid' => 'unit-click-token',
+        ],
+    ]);
+    $test->assertSame(['value' => 'unit-click-token', 'type' => 'click'], $topLevelQueryPairToken, 'webhook token can come from top-level query pair map');
+
+    $emptyQueryPairToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
+        'query_params' => [
+            ['key' => 'utm_source', 'value' => 'facebook'],
+            ['key' => 'sid', 'value' => ''],
+        ],
+    ]);
+    $test->assertSame(['value' => '', 'type' => 'form'], $emptyQueryPairToken, 'webhook token ignores query pairs without attribution tokens');
+
     $noQueryToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
         'url' => 'https://try.remedora.com/f/reta-form',
     ]);
@@ -366,6 +381,16 @@ function run_unit_tests(TestHarness $test, string $root): void
         'sid' => ['not-scalar'],
     ], ['sid']);
     $test->assertSame('', $firstString, 'string extraction ignores non-scalar values');
+
+    $previousServerForWebhookAuth = $_SERVER;
+    $_SERVER = [];
+    $test->assertSame(false, $callAppPrivate($fallbackConfigApp, 'webhookAuthorized', '', '{}'), 'webhook auth rejects empty configured secret');
+    $_SERVER = [
+        'HTTP_X_REMEDORA_TIMESTAMP' => gmdate('c', time() - 3600),
+        'HTTP_X_REMEDORA_SIGNATURE' => 'sha256=stale',
+    ];
+    $test->assertSame(false, $callAppPrivate($fallbackConfigApp, 'webhookAuthorized', 'unit-secret', '{}'), 'webhook auth rejects stale Remedora timestamps');
+    $_SERVER = $previousServerForWebhookAuth;
 
     $campaignRepo->seedFromConfig($config->campaigns());
     $_SESSION = ['admin_authenticated' => true];

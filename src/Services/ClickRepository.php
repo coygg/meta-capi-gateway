@@ -21,13 +21,13 @@ final class ClickRepository
             <<<'SQL'
             INSERT INTO clicks (
                 click_id, campaign_slug, decision, fallback_reason, landing_url,
-                ad_id, adset_id, meta_campaign_id, fbclid, fbc, fbp,
+                ad_id, adset_id, meta_campaign_id, fbclid,
                 utm_source, utm_medium, utm_campaign, utm_content,
                 client_ip, client_ip_hash, client_user_agent, user_agent_hash,
                 query_json, created_at, expires_at
             ) VALUES (
                 :click_id, :campaign_slug, :decision, :fallback_reason, :landing_url,
-                :ad_id, :adset_id, :meta_campaign_id, :fbclid, :fbc, :fbp,
+                :ad_id, :adset_id, :meta_campaign_id, :fbclid,
                 :utm_source, :utm_medium, :utm_campaign, :utm_content,
                 :client_ip, :client_ip_hash, :client_user_agent, :user_agent_hash,
                 :query_json, :created_at, :expires_at
@@ -45,8 +45,6 @@ final class ClickRepository
             ':adset_id' => $data['adset_id'] ?? null,
             ':meta_campaign_id' => $data['meta_campaign_id'] ?? null,
             ':fbclid' => $data['fbclid'] ?? null,
-            ':fbc' => $data['fbc'] ?? null,
-            ':fbp' => $data['fbp'] ?? null,
             ':utm_source' => $data['utm_source'] ?? null,
             ':utm_medium' => $data['utm_medium'] ?? null,
             ':utm_campaign' => $data['utm_campaign'] ?? null,
@@ -95,48 +93,6 @@ final class ClickRepository
     {
         $statement = $this->pdo->prepare('SELECT * FROM form_sessions WHERE session_id = :session_id LIMIT 1');
         $statement->execute([':session_id' => $sessionId]);
-        $row = $statement->fetch();
-
-        return is_array($row) ? $row : null;
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     */
-    public function recordConversion(array $data): void
-    {
-        $statement = $this->pdo->prepare(
-            <<<'SQL'
-            INSERT INTO conversions (
-                event_id, click_id, form_session_id, campaign_slug, event_name,
-                dry_run, meta_status_code, meta_response_json, created_at
-            ) VALUES (
-                :event_id, :click_id, :form_session_id, :campaign_slug, :event_name,
-                :dry_run, :meta_status_code, :meta_response_json, :created_at
-            )
-            SQL
-        );
-
-        $statement->execute([
-            ':event_id' => $data['event_id'],
-            ':click_id' => $data['click_id'],
-            ':form_session_id' => $data['form_session_id'] ?? null,
-            ':campaign_slug' => $data['campaign_slug'],
-            ':event_name' => $data['event_name'],
-            ':dry_run' => !empty($data['dry_run']) ? 1 : 0,
-            ':meta_status_code' => $data['meta_status_code'] ?? null,
-            ':meta_response_json' => $data['meta_response_json'] ?? null,
-            ':created_at' => $data['created_at'] ?? self::now(),
-        ]);
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function findConversion(string $eventId): ?array
-    {
-        $statement = $this->pdo->prepare('SELECT * FROM conversions WHERE event_id = :event_id LIMIT 1');
-        $statement->execute([':event_id' => $eventId]);
         $row = $statement->fetch();
 
         return is_array($row) ? $row : null;

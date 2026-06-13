@@ -1,6 +1,6 @@
 {
-  "name": "local/meta-capi-gateway",
-  "description": "First-party PHP click gateway for CAPI-only Meta attribution.",
+  "name": "local/meta-attribution-gateway",
+  "description": "First-party PHP click gateway that preserves Meta attribution for Remedora intake flows.",
   "type": "project",
   "require": {
     "php": ">=8.2",

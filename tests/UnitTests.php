@@ -7,7 +7,6 @@ use Gateway\App;
 use Gateway\Config;
 use Gateway\Database;
 use Gateway\Env;
-use Gateway\Services\CapiClient;
 use Gateway\Services\AdminRepository;
 use Gateway\Services\CampaignRepository;
 use Gateway\Services\ClickRepository;
@@ -108,52 +107,6 @@ function run_unit_tests(TestHarness $test, string $root): void
     $json = Response::json(['ok' => true]);
     $test->assertTrue($json instanceof Response, 'JSON response object can be created');
 
-    $client = new CapiClient(true, '', '', 'v20.0', 'https://graph.facebook.com', 'TEST123');
-    $dryRun = $client->send([
-        'event_name' => 'Lead',
-        'event_time' => time(),
-        'event_id' => 'dry-run',
-        'action_source' => 'website',
-        'user_data' => [],
-    ]);
-    $test->assertSame(true, $dryRun['dry_run'], 'CAPI dry run does not send HTTP');
-    $test->assertSame('TEST123', $dryRun['payload']['test_event_code'] ?? null, 'test event code is included in dry-run payload');
-
-    try {
-        (new CapiClient(false, '', '', 'v20.0', 'https://graph.facebook.com'))->send([
-            'event_name' => 'Lead',
-            'event_time' => time(),
-            'event_id' => 'missing-credentials',
-            'action_source' => 'website',
-            'user_data' => [],
-        ]);
-        $test->assertTrue(false, 'live CAPI requires credentials');
-    } catch (RuntimeException) {
-        $test->assertTrue(true, 'live CAPI requires credentials');
-    }
-
-    try {
-        (new CapiClient(false, 'pixel', 'token', 'v20.0', 'https://graph.facebook.com'))->send([
-            'event_name' => NAN,
-        ]);
-        $test->assertTrue(false, 'CAPI rejects unencodable JSON');
-    } catch (RuntimeException) {
-        $test->assertTrue(true, 'CAPI rejects unencodable JSON');
-    }
-
-    try {
-        (new CapiClient(false, 'pixel', 'token', 'v20.0', 'https://graph.facebook.com', '', 'invalid'))->send([
-            'event_name' => 'Lead',
-            'event_time' => time(),
-            'event_id' => 'bad-transport',
-            'action_source' => 'website',
-            'user_data' => [],
-        ]);
-        $test->assertTrue(false, 'CAPI rejects unsupported transport');
-    } catch (RuntimeException) {
-        $test->assertTrue(true, 'CAPI rejects unsupported transport');
-    }
-
     putenv('CAMPAIGN_CONFIG_PATH=');
     putenv('APP_SECRET=' . str_repeat('b', 40));
     $defaultPathConfig = Config::load($root);
@@ -211,15 +164,6 @@ function run_unit_tests(TestHarness $test, string $root): void
     $test->assertSame('unit-click', $repo->findClick('unit-click')['click_id'] ?? null, 'repository stores clicks');
     $repo->createFormSession('unit-session', 'unit-click', 'weight-intake', gmdate('c', time() + 60));
     $test->assertSame('unit-session', $repo->findFormSession('unit-session')['session_id'] ?? null, 'repository stores form sessions');
-    $repo->recordConversion([
-        'event_id' => 'unit-event',
-        'click_id' => 'unit-click',
-        'campaign_slug' => 'weight-intake',
-        'event_name' => 'Lead',
-        'dry_run' => true,
-        'meta_response_json' => '{"dry_run":true}',
-    ]);
-    $test->assertSame('unit-event', $repo->findConversion('unit-event')['event_id'] ?? null, 'repository stores conversions');
 
     $limiter = new RateLimiter($database->pdo());
     $test->assertSame(false, $limiter->exceeded('unit-limit', 2, 60), 'rate limiter permits first hit');
@@ -303,7 +247,6 @@ function run_unit_tests(TestHarness $test, string $root): void
         $campaignRepo,
         new TokenService($config->appSecret()),
         new ClickValidator(),
-        CapiClient::fromConfig($config),
         new RateLimiter($database->pdo()),
         $emptyAdmin,
     );
@@ -338,60 +281,6 @@ function run_unit_tests(TestHarness $test, string $root): void
     $test->assertSame('unit-click-token', $forwardParams['cid'] ?? null, 'form redirect includes click token fallback');
     $test->assertSame('unit-keyword', $forwardParams['utm_term'] ?? null, 'form redirect can forward UTM term from raw query');
 
-    $nestedClickToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
-        'tracking' => 'not-an-array',
-        'metadata' => ['gateway_cid' => 'unit-click-token'],
-    ]);
-    $test->assertSame(['value' => 'unit-click-token', 'type' => 'click'], $nestedClickToken, 'webhook token can come from nested click metadata');
-
-    $nestedUrlToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
-        'tracking' => 'not-an-array',
-        'metadata' => [
-            'page_url' => 'https://try.remedora.com/f/reta-form?sid=unit-form-token',
-        ],
-    ]);
-    $test->assertSame(['value' => 'unit-form-token', 'type' => 'form'], $nestedUrlToken, 'webhook token can come from nested captured URL');
-
-    $topLevelQueryPairToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
-        'queryParams' => [
-            'cid' => 'unit-click-token',
-        ],
-    ]);
-    $test->assertSame(['value' => 'unit-click-token', 'type' => 'click'], $topLevelQueryPairToken, 'webhook token can come from top-level query pair map');
-
-    $emptyQueryPairToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
-        'query_params' => [
-            ['key' => 'utm_source', 'value' => 'facebook'],
-            ['key' => 'sid', 'value' => ''],
-        ],
-    ]);
-    $test->assertSame(['value' => '', 'type' => 'form'], $emptyQueryPairToken, 'webhook token ignores query pairs without attribution tokens');
-
-    $noQueryToken = $callAppPrivate($fallbackConfigApp, 'webhookToken', [
-        'url' => 'https://try.remedora.com/f/reta-form',
-    ]);
-    $test->assertSame(['value' => '', 'type' => 'form'], $noQueryToken, 'webhook token ignores URLs without query strings');
-
-    $randomEventId = $callAppPrivate($fallbackConfigApp, 'webhookEventId', [
-        'event' => 'not-an-array',
-    ]);
-    $test->assertSame(32, strlen($randomEventId), 'webhook event id falls back when no stable id is present');
-
-    $firstString = $callAppPrivate($fallbackConfigApp, 'firstStringFromKeys', [
-        'sid' => ['not-scalar'],
-    ], ['sid']);
-    $test->assertSame('', $firstString, 'string extraction ignores non-scalar values');
-
-    $previousServerForWebhookAuth = $_SERVER;
-    $_SERVER = [];
-    $test->assertSame(false, $callAppPrivate($fallbackConfigApp, 'webhookAuthorized', '', '{}'), 'webhook auth rejects empty configured secret');
-    $_SERVER = [
-        'HTTP_X_REMEDORA_TIMESTAMP' => gmdate('c', time() - 3600),
-        'HTTP_X_REMEDORA_SIGNATURE' => 'sha256=stale',
-    ];
-    $test->assertSame(false, $callAppPrivate($fallbackConfigApp, 'webhookAuthorized', 'unit-secret', '{}'), 'webhook auth rejects stale Remedora timestamps');
-    $_SERVER = $previousServerForWebhookAuth;
-
     $campaignRepo->seedFromConfig($config->campaigns());
     $_SESSION = ['admin_authenticated' => true];
     $seededDashboard = $emptyAdmin->handle('GET', '/admin');
@@ -408,11 +297,9 @@ function run_unit_tests(TestHarness $test, string $root): void
         'landing_url' => 'https://example.com/lander',
         'form_url' => 'https://example.com/form',
         'public_fallback_url' => 'https://example.com/fallback',
-        'event_source_url' => 'https://example.com/lander',
         'allowed_domains' => 'example.com',
         'required_params' => ['ad_id'],
         'accepted_utm_sources' => ['facebook'],
-        'capi_custom_data' => [],
     ];
     $campaignRepo->save($pausedCampaign);
     $test->assertSame(null, $campaignRepo->findActive('unit-paused'), 'unknown campaign status normalizes to paused');
@@ -422,6 +309,21 @@ function run_unit_tests(TestHarness $test, string $root): void
     $id = $campaignRepo->save($pausedCampaign);
     $test->assertSame($id, $campaignRepo->findBySlug('unit-paused')['id'] ?? null, 'campaign repository updates existing campaign');
     $test->assertSame('example.com', $campaignRepo->findBySlug('unit-paused')['allowed_domains'][0] ?? null, 'campaign repository parses newline lists');
+
+    $database->pdo()->exec("ALTER TABLE campaigns ADD COLUMN event_source_url TEXT NOT NULL DEFAULT ''");
+    $database->pdo()->exec("ALTER TABLE campaigns ADD COLUMN capi_event_name TEXT NOT NULL DEFAULT ''");
+    $database->pdo()->exec("ALTER TABLE campaigns ADD COLUMN capi_custom_data_json TEXT NOT NULL DEFAULT ''");
+    $legacyCampaignRepo = new CampaignRepository($database->pdo());
+    $legacyCampaign = $pausedCampaign;
+    $legacyCampaign['slug'] = 'legacy-columns';
+    $legacyCampaign['status'] = 'active';
+    $legacyCampaign['fallback_title'] = 'Legacy compatible';
+    $legacyCampaignRepo->save($legacyCampaign);
+    $legacyRow = $database->pdo()->query("SELECT event_source_url, capi_event_name, capi_custom_data_json FROM campaigns WHERE slug = 'legacy-columns'")->fetch();
+    $test->assertSame('https://example.com/lander', $legacyRow['event_source_url'] ?? null, 'legacy event source column receives harmless lander URL');
+    $test->assertSame('Lead', $legacyRow['capi_event_name'] ?? null, 'legacy CAPI event column receives generic default');
+    $test->assertSame('[]', $legacyRow['capi_custom_data_json'] ?? null, 'legacy CAPI custom data column stays empty');
+
     try {
         $campaignRepo->normalize(['slug' => 'x', 'landing_url' => 'bad']);
         $test->assertTrue(false, 'campaign repository rejects invalid campaign slug');
@@ -434,24 +336,10 @@ function run_unit_tests(TestHarness $test, string $root): void
             'landing_url' => 'not-a-url',
             'form_url' => 'https://example.com/form',
             'public_fallback_url' => 'https://example.com/fallback',
-            'event_source_url' => 'https://example.com/lander',
         ]);
         $test->assertTrue(false, 'campaign repository rejects invalid campaign URL');
     } catch (InvalidArgumentException) {
         $test->assertTrue(true, 'campaign repository rejects invalid campaign URL');
-    }
-    try {
-        $campaignRepo->normalize([
-            'slug' => 'valid-slug',
-            'landing_url' => 'https://example.com/lander',
-            'form_url' => 'https://example.com/form',
-            'public_fallback_url' => 'https://example.com/fallback',
-            'event_source_url' => 'https://example.com/lander',
-            'capi_custom_data' => '{bad-json',
-        ]);
-        $test->assertTrue(false, 'campaign repository rejects invalid custom data JSON');
-    } catch (InvalidArgumentException) {
-        $test->assertTrue(true, 'campaign repository rejects invalid custom data JSON');
     }
 
     Env::load($root . '/does-not-exist.env');

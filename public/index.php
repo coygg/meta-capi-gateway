@@ -7,7 +7,6 @@ use Gateway\AdminController;
 use Gateway\Config;
 use Gateway\Database;
 use Gateway\Env;
-use Gateway\Services\CapiClient;
 use Gateway\Services\AdminRepository;
 use Gateway\Services\CampaignRepository;
 use Gateway\Services\ClickRepository;
@@ -49,7 +48,6 @@ $app = new App(
     campaigns: $campaignRepository,
     tokens: new TokenService($config->appSecret()),
     validator: new ClickValidator(),
-    capi: CapiClient::fromConfig($config),
     limiter: new RateLimiter($pdo),
     admin: new AdminController($config, $adminRepository, $domainRepository, $campaignRepository),
 );

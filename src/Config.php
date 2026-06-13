@@ -45,14 +45,6 @@ final class Config
                 'cname_target' => Env::get('GATEWAY_CNAME_TARGET', ''),
                 'cookie_secure' => Env::bool('COOKIE_SECURE', true),
                 'trust_proxy' => Env::bool('TRUST_PROXY', false),
-                'capi_dry_run' => Env::bool('CAPI_DRY_RUN', true),
-                'meta_pixel_id' => Env::get('META_PIXEL_ID', ''),
-                'meta_access_token' => Env::get('META_ACCESS_TOKEN', ''),
-                'meta_graph_version' => Env::get('META_GRAPH_VERSION', 'v20.0'),
-                'meta_graph_base_url' => rtrim((string) Env::get('META_GRAPH_BASE_URL', 'https://graph.facebook.com'), '/'),
-                'meta_http_transport' => Env::get('META_HTTP_TRANSPORT', 'auto'),
-                'meta_test_event_code' => Env::get('META_TEST_EVENT_CODE', ''),
-                'intake_webhook_secret' => Env::get('INTAKE_WEBHOOK_SECRET', ''),
             ],
         );
     }

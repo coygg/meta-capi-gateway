@@ -8,6 +8,9 @@ use PDO;
 
 final class CampaignRepository
 {
+    /** @var list<string>|null */
+    private ?array $campaignColumns = null;
+
     public function __construct(private readonly PDO $pdo)
     {
     }
@@ -87,58 +90,51 @@ final class CampaignRepository
         $normalized = $this->normalize($campaign);
         $now = ClickRepository::now();
         $existing = $this->findBySlug($normalized['slug']);
+        $params = $this->params($normalized, (string) ($existing['created_at'] ?? $now), $now);
+        $columns = [
+            'slug',
+            'status',
+            'landing_url',
+            'form_url',
+            'public_fallback_url',
+            'allowed_domains_json',
+            'required_params_json',
+            'accepted_utm_sources_json',
+            'click_token_ttl_seconds',
+            'form_token_ttl_seconds',
+            'click_token_param',
+            'form_token_param',
+            'fallback_title',
+            'fallback_body',
+            'intake_title',
+            'intake_body',
+        ];
+
+        foreach (['event_source_url', 'capi_event_name', 'capi_custom_data_json'] as $legacyColumn) {
+            if ($this->hasCampaignColumn($legacyColumn)) {
+                $columns[] = $legacyColumn;
+            }
+        }
 
         if ($existing === null) {
+            $insertColumns = [...$columns, 'created_at', 'updated_at'];
+            $placeholders = array_map(static fn (string $column): string => ':' . $column, $insertColumns);
             $statement = $this->pdo->prepare(
-                <<<'SQL'
-                INSERT INTO campaigns (
-                    slug, status, landing_url, form_url, public_fallback_url, event_source_url,
-                    allowed_domains_json, required_params_json, accepted_utm_sources_json,
-                    click_token_ttl_seconds, form_token_ttl_seconds, click_token_param, form_token_param,
-                    capi_event_name, capi_custom_data_json, fallback_title, fallback_body,
-                    intake_title, intake_body, created_at, updated_at
-                ) VALUES (
-                    :slug, :status, :landing_url, :form_url, :public_fallback_url, :event_source_url,
-                    :allowed_domains_json, :required_params_json, :accepted_utm_sources_json,
-                    :click_token_ttl_seconds, :form_token_ttl_seconds, :click_token_param, :form_token_param,
-                    :capi_event_name, :capi_custom_data_json, :fallback_title, :fallback_body,
-                    :intake_title, :intake_body, :created_at, :updated_at
-                )
-                SQL
+                'INSERT INTO campaigns (' . implode(', ', $insertColumns) . ') VALUES (' . implode(', ', $placeholders) . ')'
             );
-            $statement->execute($this->params($normalized, $now, $now));
+            $statement->execute($this->onlyParams($params, $insertColumns));
 
             return (int) $this->pdo->lastInsertId();
         }
 
+        $assignments = array_map(static fn (string $column): string => $column . ' = :' . $column, [
+            ...array_filter($columns, static fn (string $column): bool => $column !== 'slug'),
+            'updated_at',
+        ]);
         $statement = $this->pdo->prepare(
-            <<<'SQL'
-            UPDATE campaigns SET
-                status = :status,
-                landing_url = :landing_url,
-                form_url = :form_url,
-                public_fallback_url = :public_fallback_url,
-                event_source_url = :event_source_url,
-                allowed_domains_json = :allowed_domains_json,
-                required_params_json = :required_params_json,
-                accepted_utm_sources_json = :accepted_utm_sources_json,
-                click_token_ttl_seconds = :click_token_ttl_seconds,
-                form_token_ttl_seconds = :form_token_ttl_seconds,
-                click_token_param = :click_token_param,
-                form_token_param = :form_token_param,
-                capi_event_name = :capi_event_name,
-                capi_custom_data_json = :capi_custom_data_json,
-                fallback_title = :fallback_title,
-                fallback_body = :fallback_body,
-                intake_title = :intake_title,
-                intake_body = :intake_body,
-                updated_at = :updated_at
-            WHERE slug = :slug
-            SQL
+            'UPDATE campaigns SET ' . implode(', ', $assignments) . ' WHERE slug = :slug'
         );
-        $params = $this->params($normalized, (string) ($existing['created_at'] ?? $now), $now);
-        unset($params[':created_at']);
-        $statement->execute($params);
+        $statement->execute($this->onlyParams($params, [...$columns, 'updated_at']));
 
         return (int) $existing['id'];
     }
@@ -160,7 +156,7 @@ final class CampaignRepository
             $status = 'paused';
         }
 
-        $requiredUrls = ['landing_url', 'form_url', 'public_fallback_url', 'event_source_url'];
+        $requiredUrls = ['landing_url', 'form_url', 'public_fallback_url'];
         foreach ($requiredUrls as $key) {
             $value = trim((string) ($campaign[$key] ?? ''));
             if (!filter_var($value, FILTER_VALIDATE_URL)) {
@@ -176,7 +172,6 @@ final class CampaignRepository
             'landing_url' => (string) $campaign['landing_url'],
             'form_url' => (string) $campaign['form_url'],
             'public_fallback_url' => (string) $campaign['public_fallback_url'],
-            'event_source_url' => (string) $campaign['event_source_url'],
             'allowed_domains' => $this->stringList($campaign['allowed_domains'] ?? []),
             'required_params' => $this->stringList($campaign['required_params'] ?? ['ad_id', 'adset_id', 'campaign_id', 'utm_source']),
             'accepted_utm_sources' => $this->stringList($campaign['accepted_utm_sources'] ?? ['facebook', 'instagram']),
@@ -184,8 +179,6 @@ final class CampaignRepository
             'form_token_ttl_seconds' => max(60, (int) ($campaign['form_token_ttl_seconds'] ?? 7200)),
             'click_token_param' => trim((string) ($campaign['click_token_param'] ?? 'cid')) ?: 'cid',
             'form_token_param' => trim((string) ($campaign['form_token_param'] ?? 'sid')) ?: 'sid',
-            'capi_event_name' => trim((string) ($campaign['capi_event_name'] ?? 'Lead')) ?: 'Lead',
-            'capi_custom_data' => $this->customData($campaign['capi_custom_data'] ?? []),
             'fallback_title' => trim((string) ($campaign['fallback_title'] ?? 'Information')),
             'fallback_body' => trim((string) ($campaign['fallback_body'] ?? '')),
             'intake_title' => trim((string) ($campaign['intake_title'] ?? 'Online intake')),
@@ -208,7 +201,6 @@ final class CampaignRepository
             'landing_url' => (string) $row['landing_url'],
             'form_url' => (string) $row['form_url'],
             'public_fallback_url' => (string) $row['public_fallback_url'],
-            'event_source_url' => (string) $row['event_source_url'],
             'allowed_domains' => $this->decodeList((string) $row['allowed_domains_json']),
             'required_params' => $this->decodeList((string) $row['required_params_json']),
             'accepted_utm_sources' => $this->decodeList((string) $row['accepted_utm_sources_json']),
@@ -216,8 +208,6 @@ final class CampaignRepository
             'form_token_ttl_seconds' => (int) $row['form_token_ttl_seconds'],
             'click_token_param' => (string) $row['click_token_param'],
             'form_token_param' => (string) $row['form_token_param'],
-            'capi_event_name' => (string) $row['capi_event_name'],
-            'capi_custom_data' => $this->decodeAssoc((string) $row['capi_custom_data_json']),
             'fallback_title' => (string) $row['fallback_title'],
             'fallback_body' => (string) $row['fallback_body'],
             'intake_title' => (string) $row['intake_title'],
@@ -239,7 +229,7 @@ final class CampaignRepository
             ':landing_url' => $campaign['landing_url'],
             ':form_url' => $campaign['form_url'],
             ':public_fallback_url' => $campaign['public_fallback_url'],
-            ':event_source_url' => $campaign['event_source_url'],
+            ':event_source_url' => $campaign['landing_url'],
             ':allowed_domains_json' => json_encode($campaign['allowed_domains'], JSON_UNESCAPED_SLASHES),
             ':required_params_json' => json_encode($campaign['required_params'], JSON_UNESCAPED_SLASHES),
             ':accepted_utm_sources_json' => json_encode($campaign['accepted_utm_sources'], JSON_UNESCAPED_SLASHES),
@@ -247,8 +237,8 @@ final class CampaignRepository
             ':form_token_ttl_seconds' => $campaign['form_token_ttl_seconds'],
             ':click_token_param' => $campaign['click_token_param'],
             ':form_token_param' => $campaign['form_token_param'],
-            ':capi_event_name' => $campaign['capi_event_name'],
-            ':capi_custom_data_json' => json_encode($campaign['capi_custom_data'], JSON_UNESCAPED_SLASHES),
+            ':capi_event_name' => 'Lead',
+            ':capi_custom_data_json' => '[]',
             ':fallback_title' => $campaign['fallback_title'],
             ':fallback_body' => $campaign['fallback_body'],
             ':intake_title' => $campaign['intake_title'],
@@ -256,6 +246,32 @@ final class CampaignRepository
             ':created_at' => $createdAt,
             ':updated_at' => $updatedAt,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @param list<string> $columns
+     * @return array<string, mixed>
+     */
+    private function onlyParams(array $params, array $columns): array
+    {
+        $allowed = array_fill_keys(array_map(static fn (string $column): string => ':' . $column, $columns), true);
+
+        return array_intersect_key($params, $allowed);
+    }
+
+    private function hasCampaignColumn(string $column): bool
+    {
+        if ($this->campaignColumns === null) {
+            $statement = $this->pdo->query('PRAGMA table_info(campaigns)');
+            $rows = $statement === false ? [] : $statement->fetchAll(PDO::FETCH_ASSOC);
+            $this->campaignColumns = array_values(array_map(
+                static fn (array $row): string => (string) ($row['name'] ?? ''),
+                is_array($rows) ? $rows : []
+            ));
+        }
+
+        return in_array($column, $this->campaignColumns, true);
     }
 
     /**
@@ -278,22 +294,6 @@ final class CampaignRepository
     }
 
     /**
-     * @return array<string, mixed>
-     */
-    private function customData(mixed $value): array
-    {
-        if (is_string($value)) {
-            $decoded = json_decode($value, true);
-            if (!is_array($decoded)) {
-                throw new \InvalidArgumentException('Custom data must be valid JSON.');
-            }
-            return $decoded;
-        }
-
-        return is_array($value) ? $value : [];
-    }
-
-    /**
      * @return list<string>
      */
     private function decodeList(string $json): array
@@ -303,13 +303,4 @@ final class CampaignRepository
         return $this->stringList(is_array($decoded) ? $decoded : []);
     }
 
-    /**
-     * @return array<string, mixed>
-     */
-    private function decodeAssoc(string $json): array
-    {
-        $decoded = json_decode($json, true);
-
-        return is_array($decoded) ? $decoded : [];
-    }
 }

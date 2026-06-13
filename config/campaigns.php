@@ -16,7 +16,6 @@ return [
 
         // This page keeps the Facebook copy intact but does not expose the form flow.
         'public_fallback_url' => $baseUrl . '/fallback/weight-intake',
-        'event_source_url' => $baseUrl . '/intake/weight-intake',
 
         'allowed_domains' => [
             '127.0.0.1',
@@ -49,11 +48,6 @@ return [
         'form_token_ttl_seconds' => 7200,
         'click_token_param' => 'cid',
         'form_token_param' => 'sid',
-        'capi_event_name' => 'Lead',
-
-        // Keep this generic for telehealth. Do not include diagnosis, treatment,
-        // medication, symptoms, or form answers in Meta events.
-        'capi_custom_data' => [],
 
         'fallback_title' => 'Online health intake',
         'fallback_body' => 'Review general information about this online intake pathway. The secure intake form is available from eligible ad sessions.',

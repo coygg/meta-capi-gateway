@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Gateway;
 
-use Gateway\Services\CapiClient;
 use Gateway\Services\CampaignRepository;
 use Gateway\Services\ClickRepository;
 use Gateway\Services\ClickValidator;
@@ -22,7 +21,6 @@ final class App
         private readonly CampaignRepository $campaigns,
         private readonly TokenService $tokens,
         private readonly ClickValidator $validator,
-        private readonly CapiClient $capi,
         private readonly RateLimiter $limiter,
         private readonly AdminController $admin,
     ) {
@@ -48,10 +46,6 @@ final class App
 
             if ($method === 'GET' && $path === '/start') {
                 return $this->startForm();
-            }
-
-            if ($method === 'POST' && $path === '/capi/intake-completed') {
-                return $this->recordIntakeCompleted();
             }
 
             if ($method === 'GET' && preg_match('#^/fallback/([A-Za-z0-9_-]+)$#', $path, $match) === 1) {
@@ -100,8 +94,6 @@ final class App
             return Response::redirect((string) $campaign['public_fallback_url']);
         }
 
-        $fbc = $this->resolveFbc($_GET);
-        $fbp = $this->resolveFbp();
         $ttl = (int) ($campaign['click_token_ttl_seconds'] ?? 1800);
         $expiresAt = gmdate('c', time() + $ttl);
         $token = $this->tokens->sign([
@@ -123,16 +115,11 @@ final class App
             fallbackReason: null,
             landingUrl: $landingUrl,
             clientIp: $clientIp,
-            fbc: $fbc,
-            fbp: $fbp,
             expiresAt: $expiresAt,
         ));
 
         return Response::redirect($landingUrl, 302, [
-            'Set-Cookie' => [
-                Cookie::make('pj_fbp', $fbp, 60 * 60 * 24 * 90, $this->config->bool('cookie_secure', true)),
-                Cookie::make('pj_click', $token, $ttl, $this->config->bool('cookie_secure', true)),
-            ],
+            'Set-Cookie' => Cookie::make('pj_click', $token, $ttl, $this->config->bool('cookie_secure', true)),
         ]);
     }
 
@@ -175,76 +162,6 @@ final class App
 
         return Response::redirect($formUrl, 302, [
             'Set-Cookie' => Cookie::make('pj_form', $formToken, $ttl, $this->config->bool('cookie_secure', true)),
-        ]);
-    }
-
-    private function recordIntakeCompleted(): Response
-    {
-        $configuredSecret = $this->config->string('intake_webhook_secret');
-        $rawInput = file_get_contents('php://input') ?: '';
-
-        if (!$this->webhookAuthorized($configuredSecret, $rawInput)) {
-            return Response::json(['error' => 'unauthorized'], 401);
-        }
-
-        $input = $this->jsonInput($rawInput);
-        $token = $this->webhookToken($input);
-        $verification = $this->tokens->verify($token['value'], $token['type']);
-
-        if (!$verification['valid']) {
-            return Response::json(['error' => 'invalid_token', 'reason' => $verification['reason']], 400);
-        }
-
-        $clickId = (string) ($verification['claims']['click_id'] ?? '');
-        $slug = (string) ($verification['claims']['campaign'] ?? '');
-        $click = $this->repository->findClick($clickId);
-        $campaign = $this->activeCampaign($slug);
-
-        if ($click === null || ($click['decision'] ?? null) !== 'allow') {
-            return Response::json(['error' => 'click_not_found'], 404);
-        }
-
-        $sessionId = (string) ($verification['claims']['session_id'] ?? '');
-        if ($sessionId !== '' && $this->repository->findFormSession($sessionId) === null) {
-            return Response::json(['error' => 'form_session_not_found'], 404);
-        }
-
-        $eventName = (string) ($campaign['capi_event_name'] ?? 'Lead');
-        $eventId = $this->webhookEventId($input);
-        $existingConversion = $this->repository->findConversion($eventId);
-
-        if ($existingConversion !== null) {
-            return Response::json([
-                'ok' => true,
-                'duplicate' => true,
-                'event_id' => $eventId,
-                'meta_status_code' => isset($existingConversion['meta_status_code'])
-                    ? (int) $existingConversion['meta_status_code']
-                    : null,
-                'meta_response' => json_decode((string) ($existingConversion['meta_response_json'] ?? '{}'), true) ?: [],
-            ]);
-        }
-
-        $event = $this->buildCapiEvent($eventName, $eventId, $campaign, $click);
-        $result = $this->capi->send($event);
-
-        $this->repository->recordConversion([
-            'event_id' => $eventId,
-            'click_id' => $clickId,
-            'form_session_id' => $sessionId !== '' ? $sessionId : null,
-            'campaign_slug' => $slug,
-            'event_name' => $eventName,
-            'dry_run' => $result['dry_run'],
-            'meta_status_code' => $result['status_code'],
-            'meta_response_json' => json_encode($result['response'], JSON_UNESCAPED_SLASHES),
-        ]);
-
-        return Response::json([
-            'ok' => true,
-            'dry_run' => $result['dry_run'],
-            'event_id' => $eventId,
-            'meta_status_code' => $result['status_code'],
-            'meta_response' => $result['response'],
         ]);
     }
 
@@ -324,314 +241,6 @@ final class App
     }
 
     /**
-     * @param array<string, mixed> $input
-     * @return list<array<string, mixed>>
-     */
-    private function webhookContainerCandidates(array $input): array
-    {
-        $containers = [];
-        $names = [
-            'tracking',
-            'metadata',
-            'meta',
-            'query',
-            'query_params',
-            'url_params',
-            'custom_fields',
-            'customFields',
-            'hidden_fields',
-            'hiddenFields',
-            'data',
-        ];
-
-        foreach ($names as $name) {
-            $container = $input[$name] ?? null;
-
-            if (is_array($container)) {
-                $containers[] = $container;
-            }
-        }
-
-        $data = $input['data'] ?? null;
-        if (is_array($data)) {
-            foreach (['session', 'attribution', 'tracking', 'metadata', 'meta', 'query', 'custom_fields', 'hidden_fields'] as $name) {
-                $container = $data[$name] ?? null;
-
-                if (is_array($container)) {
-                    $containers[] = $container;
-                }
-            }
-        }
-
-        return $containers;
-    }
-
-    /**
-     * @param array<string, mixed> $input
-     * @return array{value: string, type: string}
-     */
-    private function webhookToken(array $input): array
-    {
-        $formKeys = ['sid', 'gateway_sid', 'form_session_token', 'form_token', 'attribution_sid'];
-        $clickKeys = ['cid', 'gateway_cid', 'click_token', 'attribution_cid'];
-
-        $token = $this->firstStringFromKeys($input, $formKeys);
-        if ($token !== '') {
-            return ['value' => $token, 'type' => 'form'];
-        }
-
-        $token = $this->firstStringFromKeys($input, $clickKeys);
-        if ($token !== '') {
-            return ['value' => $token, 'type' => 'click'];
-        }
-
-        foreach ($this->webhookContainerCandidates($input) as $container) {
-            $token = $this->firstStringFromKeys($container, $formKeys);
-            if ($token !== '') {
-                return ['value' => $token, 'type' => 'form'];
-            }
-
-            $token = $this->firstStringFromKeys($container, $clickKeys);
-            if ($token !== '') {
-                return ['value' => $token, 'type' => 'click'];
-            }
-        }
-
-        $token = $this->webhookTokenFromQueryPairs($input, $formKeys, $clickKeys);
-        if ($token['value'] !== '') {
-            return $token;
-        }
-
-        foreach ($this->webhookContainerCandidates($input) as $container) {
-            $token = $this->webhookTokenFromQueryPairs($container, $formKeys, $clickKeys);
-            if ($token['value'] !== '') {
-                return $token;
-            }
-        }
-
-        $token = $this->webhookTokenFromUrlFields($input, $formKeys, $clickKeys);
-        if ($token['value'] !== '') {
-            return $token;
-        }
-
-        foreach ($this->webhookContainerCandidates($input) as $container) {
-            $token = $this->webhookTokenFromUrlFields($container, $formKeys, $clickKeys);
-            if ($token['value'] !== '') {
-                return $token;
-            }
-        }
-
-        return ['value' => '', 'type' => 'form'];
-    }
-
-    /**
-     * @param array<string, mixed> $source
-     * @param list<string> $formKeys
-     * @param list<string> $clickKeys
-     * @return array{value: string, type: string}
-     */
-    private function webhookTokenFromQueryPairs(array $source, array $formKeys, array $clickKeys): array
-    {
-        $pairs = $source['query_params'] ?? $source['queryParams'] ?? null;
-
-        if (!is_array($pairs)) {
-            return ['value' => '', 'type' => 'form'];
-        }
-
-        $params = [];
-        foreach ($pairs as $key => $pair) {
-            if (is_array($pair)) {
-                $pairKey = $this->firstStringFromKeys($pair, ['key', 'name']);
-                $pairValue = $this->firstStringFromKeys($pair, ['value']);
-
-                if ($pairKey !== '' && $pairValue !== '') {
-                    $params[$pairKey] = $pairValue;
-                }
-
-                continue;
-            }
-
-            if (is_scalar($pair)) {
-                $params[(string) $key] = (string) $pair;
-            }
-        }
-
-        $token = $this->firstStringFromKeys($params, $formKeys);
-        if ($token !== '') {
-            return ['value' => $token, 'type' => 'form'];
-        }
-
-        $token = $this->firstStringFromKeys($params, $clickKeys);
-        if ($token !== '') {
-            return ['value' => $token, 'type' => 'click'];
-        }
-
-        return ['value' => '', 'type' => 'form'];
-    }
-
-    /**
-     * @param array<string, mixed> $source
-     * @param list<string> $formKeys
-     * @param list<string> $clickKeys
-     * @return array{value: string, type: string}
-     */
-    private function webhookTokenFromUrlFields(array $source, array $formKeys, array $clickKeys): array
-    {
-        foreach (['url', 'page_url', 'landing_url', 'source_url', 'referrer', 'resume_url'] as $field) {
-            $url = $this->firstStringFromKeys($source, [$field]);
-
-            if ($url === '') {
-                continue;
-            }
-
-            $query = parse_url($url, PHP_URL_QUERY);
-            if (!is_string($query) || $query === '') {
-                continue;
-            }
-
-            parse_str($query, $params);
-
-            $token = $this->firstStringFromKeys($params, $formKeys);
-            if ($token !== '') {
-                return ['value' => $token, 'type' => 'form'];
-            }
-
-            $token = $this->firstStringFromKeys($params, $clickKeys);
-            if ($token !== '') {
-                return ['value' => $token, 'type' => 'click'];
-            }
-        }
-
-        return ['value' => '', 'type' => 'form'];
-    }
-
-    /**
-     * @param array<string, mixed> $input
-     */
-    private function webhookEventId(array $input): string
-    {
-        $keys = [
-            'event_id',
-            'eventId',
-            'submission_id',
-            'submissionId',
-            'checkout_id',
-            'checkoutId',
-            'order_id',
-            'orderId',
-            'session_id',
-            'sessionId',
-            'id',
-        ];
-
-        $eventId = $this->firstStringFromKeys($input, $keys);
-        if ($eventId !== '') {
-            return $eventId;
-        }
-
-        $eventId = $this->firstStringAtPath($input, ['meta', 'delivery_id'])
-            ?: $this->firstStringAtPath($input, ['data', 'session', 'reference'])
-            ?: $this->firstStringAtPath($input, ['data', 'session', 'id']);
-
-        if ($eventId !== '') {
-            return $eventId;
-        }
-
-        foreach (['event', 'submission', 'checkout', 'order', 'session', 'sessionMeta', 'session_meta', 'data', 'meta'] as $containerName) {
-            $container = $input[$containerName] ?? null;
-
-            if (!is_array($container)) {
-                continue;
-            }
-
-            $eventId = $this->firstStringFromKeys($container, $keys);
-            if ($eventId !== '') {
-                return $eventId;
-            }
-        }
-
-        return bin2hex(random_bytes(16));
-    }
-
-    /**
-     * @param array<string, mixed> $source
-     * @param list<string> $path
-     */
-    private function firstStringAtPath(array $source, array $path): string
-    {
-        $current = $source;
-
-        foreach ($path as $segment) {
-            if (!is_array($current) || !array_key_exists($segment, $current)) {
-                return '';
-            }
-
-            $current = $current[$segment];
-        }
-
-        return is_scalar($current) ? trim((string) $current) : '';
-    }
-
-    /**
-     * @param array<string, mixed> $source
-     * @param list<string> $keys
-     */
-    private function firstStringFromKeys(array $source, array $keys): string
-    {
-        foreach ($keys as $key) {
-            if (!array_key_exists($key, $source) || !is_scalar($source[$key])) {
-                continue;
-            }
-
-            $value = trim((string) $source[$key]);
-
-            if ($value !== '') {
-                return $value;
-            }
-        }
-
-        return '';
-    }
-
-    /**
-     * @param array<string, mixed> $campaign
-     * @param array<string, mixed> $click
-     * @return array<string, mixed>
-     */
-    private function buildCapiEvent(string $eventName, string $eventId, array $campaign, array $click): array
-    {
-        $userData = [
-            'client_ip_address' => (string) ($click['client_ip'] ?? ''),
-            'client_user_agent' => (string) ($click['client_user_agent'] ?? ''),
-        ];
-
-        if (!empty($click['fbc'])) {
-            $userData['fbc'] = (string) $click['fbc'];
-        }
-
-        if (!empty($click['fbp'])) {
-            $userData['fbp'] = (string) $click['fbp'];
-        }
-
-        $event = [
-            'event_name' => $eventName,
-            'event_time' => time(),
-            'event_id' => $eventId,
-            'action_source' => 'website',
-            'event_source_url' => (string) ($campaign['event_source_url'] ?? $campaign['landing_url']),
-            'user_data' => array_filter($userData, static fn (string $value): bool => $value !== ''),
-        ];
-
-        $customData = $campaign['capi_custom_data'] ?? [];
-
-        if (is_array($customData) && $customData !== []) {
-            $event['custom_data'] = $customData;
-        }
-
-        return $event;
-    }
-
-    /**
      * @param array<string, mixed> $campaign
      * @return list<string>
      */
@@ -661,37 +270,6 @@ final class App
     }
 
     /**
-     * @param array<string, mixed> $query
-     */
-    private function resolveFbc(array $query): string
-    {
-        $cookie = (string) ($_COOKIE['pj_fbc'] ?? '');
-
-        if ($cookie !== '') {
-            return $cookie;
-        }
-
-        $fbclid = trim((string) ($query['fbclid'] ?? ''));
-
-        if ($fbclid === '') {
-            return '';
-        }
-
-        return 'fb.1.' . ((string) ((int) floor(microtime(true) * 1000))) . '.' . $fbclid;
-    }
-
-    private function resolveFbp(): string
-    {
-        $cookie = (string) ($_COOKIE['pj_fbp'] ?? '');
-
-        if ($cookie !== '') {
-            return $cookie;
-        }
-
-        return 'fb.1.' . ((string) ((int) floor(microtime(true) * 1000))) . '.' . random_int(1000000000, 2147483647);
-    }
-
-    /**
      * @param array<string, mixed> $campaign
      * @return array<string, mixed>
      */
@@ -703,8 +281,6 @@ final class App
         ?string $fallbackReason,
         string $landingUrl,
         string $clientIp,
-        string $fbc = '',
-        string $fbp = '',
         ?string $expiresAt = null,
     ): array {
         $ua = (string) ($_SERVER['HTTP_USER_AGENT'] ?? '');
@@ -719,8 +295,6 @@ final class App
             'adset_id' => (string) ($_GET['adset_id'] ?? ''),
             'meta_campaign_id' => (string) ($_GET['campaign_id'] ?? ''),
             'fbclid' => (string) ($_GET['fbclid'] ?? ''),
-            'fbc' => $fbc,
-            'fbp' => $fbp,
             'utm_source' => (string) ($_GET['utm_source'] ?? ''),
             'utm_medium' => (string) ($_GET['utm_medium'] ?? ''),
             'utm_campaign' => (string) ($_GET['utm_campaign'] ?? ''),
@@ -757,49 +331,6 @@ final class App
     private function hashForLogs(string $value): string
     {
         return hash_hmac('sha256', $value, $this->config->appSecret());
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function jsonInput(?string $raw = null): array
-    {
-        $raw ??= file_get_contents('php://input') ?: '';
-        $decoded = json_decode($raw, true);
-
-        if (!is_array($decoded)) {
-            return [];
-        }
-
-        return $decoded;
-    }
-
-    private function webhookAuthorized(string $configuredSecret, string $rawInput): bool
-    {
-        if ($configuredSecret === '') {
-            return false;
-        }
-
-        $providedSecret = (string) ($_SERVER['HTTP_X_WEBHOOK_SECRET'] ?? '');
-        if ($providedSecret !== '' && hash_equals($configuredSecret, $providedSecret)) {
-            return true;
-        }
-
-        $timestamp = trim((string) ($_SERVER['HTTP_X_REMEDORA_TIMESTAMP'] ?? ''));
-        $signature = trim((string) ($_SERVER['HTTP_X_REMEDORA_SIGNATURE'] ?? ''));
-
-        if ($timestamp === '' || $signature === '') {
-            return false;
-        }
-
-        $timestampSeconds = strtotime($timestamp);
-        if ($timestampSeconds === false || abs(time() - $timestampSeconds) > 15 * 60) {
-            return false;
-        }
-
-        $expected = 'sha256=' . hash_hmac('sha256', $timestamp . '.' . $rawInput, $configuredSecret);
-
-        return hash_equals($expected, $signature);
     }
 
     private function page(string $title, string $content): string

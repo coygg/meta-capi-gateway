@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Gateway\Services\CapiClient;
 use Gateway\Services\TokenService;
 
 function run_e2e_tests(TestHarness $test, string $root): void
@@ -14,18 +13,14 @@ function run_e2e_tests(TestHarness $test, string $root): void
 
     $gatewayPort = 18080;
     $telehealthPort = 18081;
-    $metaPort = 18082;
     $gatewayBase = 'http://127.0.0.1:' . $gatewayPort;
     $telehealthBase = 'http://127.0.0.1:' . $telehealthPort;
-    $metaBase = 'http://127.0.0.1:' . $metaPort;
     $coverageDir = $root . '/tests/.runtime/e2e/coverage';
     rm_rf($coverageDir);
     mkdir($coverageDir, 0777, true);
 
-    $metaLog = $runtime . '/meta-requests.jsonl';
     $telehealthLog = $runtime . '/telehealth-sessions.jsonl';
     $gatewayEnvFile = $runtime . '/gateway.env';
-    $webhookSecret = 'e2e-webhook-secret';
     $processes = [];
 
     file_put_contents($gatewayEnvFile, implode(PHP_EOL, [
@@ -35,25 +30,14 @@ function run_e2e_tests(TestHarness $test, string $root): void
         'DB_PATH=' . $runtime . '/gateway.sqlite',
         'COOKIE_SECURE=0',
         'TRUST_PROXY=1',
-        'CAPI_DRY_RUN=0',
-        'META_PIXEL_ID=test-pixel',
-        'META_ACCESS_TOKEN=test-token',
-        'META_GRAPH_VERSION=v20.0',
-        'META_GRAPH_BASE_URL=' . $metaBase,
-        'INTAKE_WEBHOOK_SECRET=' . $webhookSecret,
         'CAMPAIGN_CONFIG_PATH=' . $root . '/tests/fixtures/campaigns.e2e.php',
         'TEST_TELEHEALTH_URL=' . $telehealthBase . '/intake/start',
         '',
     ]));
 
     try {
-        $processes[] = start_php_server('127.0.0.1', $metaPort, $root . '/tests/mock-meta', $runtime . '/mock-meta.log', [
-            'MOCK_META_LOG' => $metaLog,
-        ]);
         $processes[] = start_php_server('127.0.0.1', $telehealthPort, $root . '/tests/mock-telehealth', $runtime . '/mock-telehealth.log', [
             'MOCK_TELEHEALTH_LOG' => $telehealthLog,
-            'GATEWAY_WEBHOOK_URL' => $gatewayBase . '/capi/intake-completed',
-            'INTAKE_WEBHOOK_SECRET' => $webhookSecret,
         ]);
 
         $processes[] = start_php_server('127.0.0.1', $gatewayPort, $root . '/public', $runtime . '/gateway.log', [
@@ -66,7 +50,6 @@ function run_e2e_tests(TestHarness $test, string $root): void
             'auto_append_file' => $root . '/tests/coverage-append.php',
         ]);
 
-        wait_for_url($metaBase . '/health');
         wait_for_url($telehealthBase . '/health');
         wait_for_url($gatewayBase . '/health');
 
@@ -189,6 +172,7 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $newCampaignForm = http_request('GET', $gatewayBase . '/admin/campaigns/new', ['Cookie' => $adminCookie]);
         $test->assertSame(200, $newCampaignForm['status'], 'new campaign form renders');
         $test->assertContains('New campaign', $newCampaignForm['body'], 'new campaign form has title');
+        $test->assertTrue(!str_contains($newCampaignForm['body'], 'CAPI'), 'new campaign form does not expose CAPI fields');
 
         $campaignPayload = [
             '_csrf' => $csrf,
@@ -197,7 +181,6 @@ function run_e2e_tests(TestHarness $test, string $root): void
             'landing_url' => $gatewayBase . '/intake/portal-intake',
             'form_url' => $telehealthBase . '/intake/start',
             'public_fallback_url' => $gatewayBase . '/fallback/portal-intake',
-            'event_source_url' => $gatewayBase . '/intake/portal-intake',
             'allowed_domains' => "127.0.0.1\nlocalhost",
             'required_params' => "ad_id\nadset_id\ncampaign_id\nutm_source",
             'accepted_utm_sources' => "facebook\ninstagram",
@@ -205,8 +188,6 @@ function run_e2e_tests(TestHarness $test, string $root): void
             'form_token_ttl_seconds' => '7200',
             'click_token_param' => 'cid',
             'form_token_param' => 'sid',
-            'capi_event_name' => 'Lead',
-            'capi_custom_data' => '{}',
             'fallback_title' => 'Portal fallback',
             'fallback_body' => 'Portal-managed fallback.',
             'intake_title' => 'Portal intake',
@@ -229,17 +210,19 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $editCampaignForm = http_request('GET', $gatewayBase . '/admin/campaigns/' . $campaignId . '/edit', ['Cookie' => $adminCookie]);
         $test->assertSame(200, $editCampaignForm['status'], 'edit campaign form renders');
         $test->assertContains('Edit campaign', $editCampaignForm['body'], 'edit campaign form has title');
+        $test->assertTrue(!str_contains($editCampaignForm['body'], 'CAPI'), 'edit campaign form does not expose CAPI fields');
         $editCsrf = csrf_from_body($editCampaignForm['body']);
+
         $badCampaignPayload = $campaignPayload;
         $badCampaignPayload['_csrf'] = $editCsrf;
-        $badCampaignPayload['capi_custom_data'] = '{bad-json';
+        $badCampaignPayload['form_url'] = 'not-a-url';
         $badCampaignSave = http_request(
             'POST',
             $gatewayBase . '/admin/campaigns/' . $campaignId,
             ['Content-Type' => 'application/x-www-form-urlencoded', 'Cookie' => $adminCookie],
             http_build_query($badCampaignPayload)
         );
-        $test->assertSame(422, $badCampaignSave['status'], 'edit campaign rejects invalid custom data');
+        $test->assertSame(422, $badCampaignSave['status'], 'edit campaign rejects invalid form URL');
 
         $campaignPayload['_csrf'] = $editCsrf;
         $campaignPayload['intake_title'] = 'Updated portal intake';
@@ -313,14 +296,18 @@ function run_e2e_tests(TestHarness $test, string $root): void
 
         $validClick = http_request(
             'GET',
-            $gatewayBase . '/c/weight-intake?ad_id=ad-123&adset_id=set-456&campaign_id=camp-789&utm_source=facebook&utm_medium=paid_social&utm_campaign=demo&utm_content=ad&fbclid=fbclid-123',
+            $gatewayBase . '/c/weight-intake?ad_id=ad-123&adset_id=set-456&campaign_id=camp-789&utm_source=facebook&utm_medium=paid_social&utm_campaign=demo&utm_content=ad&utm_term=keyword&fbclid=fbclid-123',
             ['X-Forwarded-For' => '203.0.113.10, 198.51.100.20']
         );
         $test->assertSame(302, $validClick['status'], 'valid expanded Meta click redirects');
+        $test->assertTrue(!str_contains(implode("\n", $validClick['headers']['set-cookie'] ?? []), 'pj_fbp'), 'gateway no longer creates Meta browser id cookies');
         $landingLocation = header_value($validClick, 'location');
         $test->assertContains('/intake/weight-intake', $landingLocation, 'valid click lands on static intake');
         $cid = query_params($landingLocation)['cid'] ?? '';
         $test->assertTrue($cid !== '', 'valid click receives signed cid');
+
+        $cookieStart = http_request('GET', $gatewayBase . '/start', ['Cookie' => cookie_header($validClick)]);
+        $test->assertSame(302, $cookieStart['status'], 'start can use protected click cookie when cid query is absent');
 
         $lander = http_request('GET', $landingLocation);
         $test->assertSame(200, $lander['status'], 'static intake lander renders');
@@ -343,41 +330,23 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $test->assertSame('paid_social', $formParams['utm_medium'] ?? null, 'form redirect forwards UTM medium');
         $test->assertSame('demo', $formParams['utm_campaign'] ?? null, 'form redirect forwards UTM campaign');
         $test->assertSame('ad', $formParams['utm_content'] ?? null, 'form redirect forwards UTM content');
+        $test->assertSame('keyword', $formParams['utm_term'] ?? null, 'form redirect forwards UTM term');
 
         $telehealthStart = http_request('GET', $formLocation);
         $test->assertSame(200, $telehealthStart['status'], 'mock telehealth captures sid');
         $test->assertContains('Mock telehealth intake', $telehealthStart['body'], 'mock telehealth renders intake');
+        $telehealthSessions = read_jsonl($telehealthLog);
+        $capturedQuery = $telehealthSessions[count($telehealthSessions) - 1]['query'] ?? [];
+        $test->assertSame('fbclid-123', $capturedQuery['fbclid'] ?? null, 'telehealth side receives fbclid for its own direct Meta CAPI');
+        $test->assertSame($cid, $capturedQuery['cid'] ?? null, 'telehealth side receives gateway cid');
+        $test->assertSame($sid, $capturedQuery['sid'] ?? null, 'telehealth side receives gateway sid');
 
-        $completion = http_request('POST', $telehealthBase . '/complete?event_id=e2e-event-1');
-        $test->assertSame(200, $completion['status'], 'mock telehealth completion endpoint responds');
-        $completionPayload = json_decode($completion['body'], true);
-        $test->assertSame(200, (int) ($completionPayload['gateway_status'] ?? 0), 'mock telehealth posts conversion webhook to gateway');
-        $gatewayPayload = $completionPayload['gateway_body'] ?? [];
-        $test->assertSame(true, $gatewayPayload['ok'] ?? false, 'gateway accepts telehealth conversion');
-        $test->assertSame(false, $gatewayPayload['dry_run'] ?? true, 'gateway sends live request to mock Meta in e2e');
-
-        $metaRequests = read_jsonl($metaLog);
-        $test->assertSame(1, count($metaRequests), 'mock Meta receives exactly one CAPI event');
-        $metaRequest = $metaRequests[0];
-        $test->assertContains('/v20.0/test-pixel/events', (string) ($metaRequest['uri'] ?? ''), 'CAPI request uses configured mock Meta URL');
-        $metaPayload = $metaRequest['json'] ?? [];
-        $event = $metaPayload['data'][0] ?? [];
-        $test->assertSame('Lead', $event['event_name'] ?? null, 'CAPI event name is generic Lead');
-        $test->assertSame('e2e-event-1', $event['event_id'] ?? null, 'CAPI event id comes from telehealth platform');
-        $test->assertSame('website', $event['action_source'] ?? null, 'CAPI action source is website');
-        $test->assertContains('fbclid-123', $event['user_data']['fbc'] ?? '', 'CAPI fbc preserves original fbclid');
-        $test->assertTrue(isset($event['user_data']['fbp']), 'CAPI fbp is present');
-        $test->assertTrue(!isset($event['custom_data']), 'CAPI payload omits custom data by default');
-        $test->assertTrue(!str_contains(json_encode($metaPayload, JSON_UNESCAPED_SLASHES) ?: '', 'diagnosis'), 'CAPI payload does not include health terms');
-
-        $duplicate = http_request('POST', $telehealthBase . '/complete?event_id=e2e-event-1');
-        $duplicatePayload = json_decode($duplicate['body'], true);
-        $duplicateGateway = $duplicatePayload['gateway_body'] ?? [];
-        $test->assertSame(true, $duplicateGateway['duplicate'] ?? false, 'duplicate telehealth webhook is idempotent');
-        $test->assertSame(1, count(read_jsonl($metaLog)), 'duplicate event does not send another CAPI request');
+        $completion = http_request('POST', $telehealthBase . '/complete');
+        $completionPayload = json_decode($completion['body'], true) ?: [];
+        $test->assertSame(200, $completion['status'], 'mock telehealth completion endpoint responds without gateway webhook');
+        $test->assertSame($sid, $completionPayload['sid'] ?? null, 'mock telehealth completes with captured session');
 
         $tokens = new TokenService('e2e-development-secret-change-before-production-12345');
-        $cidClaims = $tokens->verify($cid, 'click')['claims'];
         $unknownClickToken = $tokens->sign([
             'type' => 'click',
             'click_id' => 'missing-click',
@@ -386,192 +355,18 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $unknownStart = http_request('GET', $gatewayBase . '/start?cid=' . rawurlencode($unknownClickToken));
         $test->assertSame(404, $unknownStart['status'], 'start rejects signed token for missing click');
 
-        $unknownClickWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            json_encode(['cid' => $unknownClickToken, 'event_id' => 'missing-click-event'], JSON_UNESCAPED_SLASHES)
-        );
-        $test->assertSame(404, $unknownClickWebhook['status'], 'webhook rejects signed token for missing click');
-
-        $missingSessionToken = $tokens->sign([
-            'type' => 'form',
-            'session_id' => 'missing-session',
-            'click_id' => (string) ($cidClaims['click_id'] ?? ''),
-            'campaign' => 'weight-intake',
-        ], 600);
-        $missingSessionWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            json_encode(['sid' => $missingSessionToken, 'event_id' => 'missing-session-event'], JSON_UNESCAPED_SLASHES)
-        );
-        $test->assertSame(404, $missingSessionWebhook['status'], 'webhook rejects missing form session');
-
-        $invalidJsonWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            '{bad-json'
-        );
-        $test->assertSame(400, $invalidJsonWebhook['status'], 'webhook rejects malformed JSON body');
-
-        $cookieFlow = complete_mock_flow(
-            $gatewayBase,
-            $telehealthBase,
-            'weight-intake',
-            'e2e-event-cookie',
-            ['Cookie' => 'pj_fbc=cookie-fbc; pj_fbp=cookie-fbp']
-        );
-        $test->assertSame(200, $cookieFlow['completion_status'], 'cookie attribution flow completes');
-        $metaAfterCookie = read_jsonl($metaLog);
-        $cookieEvent = $metaAfterCookie[1]['json']['data'][0] ?? [];
-        $test->assertSame('cookie-fbc', $cookieEvent['user_data']['fbc'] ?? null, 'gateway preserves incoming fbc cookie');
-        $test->assertSame('cookie-fbp', $cookieEvent['user_data']['fbp'] ?? null, 'gateway preserves incoming fbp cookie');
-
         $noFbclidFlow = complete_mock_flow(
             $gatewayBase,
             $telehealthBase,
             'weight-intake',
-            'e2e-event-no-fbclid',
             ['CF-Connecting-IP' => '203.0.113.44'],
             ['fbclid' => null]
         );
-        $test->assertSame(200, $noFbclidFlow['completion_status'], 'no-fbclid flow completes');
-        $metaAfterNoFbclid = read_jsonl($metaLog);
-        $noFbclidEvent = $metaAfterNoFbclid[2]['json']['data'][0] ?? [];
-        $test->assertTrue(!isset($noFbclidEvent['user_data']['fbc']), 'CAPI omits fbc when no fbclid or fbc cookie exists');
+        $test->assertSame(200, $noFbclidFlow['completion_status'], 'no-fbclid flow still reaches telehealth');
+        $test->assertTrue(!isset($noFbclidFlow['form_params']['fbclid']), 'form redirect omits fbclid when Meta did not provide one');
 
-        $customFlow = complete_mock_flow($gatewayBase, $telehealthBase, 'custom-intake', 'e2e-event-custom');
-        $test->assertSame(200, $customFlow['completion_status'], 'custom campaign flow completes');
-        $metaAfterCustom = read_jsonl($metaLog);
-        $customEvent = $metaAfterCustom[3]['json']['data'][0] ?? [];
-        $test->assertSame('generic-intake', $customEvent['custom_data']['content_name'] ?? null, 'configured custom_data is included when present');
-
-        $remedoraPayload = [
-            'event' => ['id' => 'remedora-nested-event'],
-            'session' => ['id' => 'remedora-session-1'],
-            'metadata' => ['sid' => $sid],
-            'page_url' => 'https://try.remedora.com/f/reta-form?sid=' . rawurlencode($sid) . '&cid=' . rawurlencode($cid),
-        ];
-        $remedoraWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            json_encode($remedoraPayload, JSON_UNESCAPED_SLASHES)
-        );
-        $test->assertSame(200, $remedoraWebhook['status'], 'webhook accepts Remedora-style nested metadata');
-        $metaAfterRemedora = read_jsonl($metaLog);
-        $remedoraEvent = $metaAfterRemedora[4]['json']['data'][0] ?? [];
-        $test->assertSame('remedora-nested-event', $remedoraEvent['event_id'] ?? null, 'nested event id is used for idempotency');
-
-        $remedoraDuplicate = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            json_encode($remedoraPayload, JSON_UNESCAPED_SLASHES)
-        );
-        $remedoraDuplicatePayload = json_decode($remedoraDuplicate['body'], true) ?: [];
-        $test->assertSame(true, $remedoraDuplicatePayload['duplicate'] ?? false, 'nested Remedora-style webhook is idempotent');
-        $test->assertSame(5, count(read_jsonl($metaLog)), 'nested duplicate does not send another CAPI request');
-
-        $urlOnlyWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            json_encode([
-                'sessionMeta' => ['session_id' => 'remedora-url-session'],
-                'page_url' => 'https://try.remedora.com/f/reta-form?sid=' . rawurlencode($sid) . '&cid=' . rawurlencode($cid),
-            ], JSON_UNESCAPED_SLASHES)
-        );
-        $test->assertSame(200, $urlOnlyWebhook['status'], 'webhook can recover sid from captured form URL');
-        $metaAfterUrlOnly = read_jsonl($metaLog);
-        $urlOnlyEvent = $metaAfterUrlOnly[5]['json']['data'][0] ?? [];
-        $test->assertSame('remedora-url-session', $urlOnlyEvent['event_id'] ?? null, 'nested session id can drive event id');
-
-        $clickOnlyWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            json_encode([
-                'submission_id' => 'remedora-click-url',
-                'resume_url' => 'https://try.remedora.com/f/reta-form?cid=' . rawurlencode($cid),
-            ], JSON_UNESCAPED_SLASHES)
-        );
-        $test->assertSame(200, $clickOnlyWebhook['status'], 'webhook can recover cid from captured form URL');
-        $metaAfterClickOnly = read_jsonl($metaLog);
-        $clickOnlyEvent = $metaAfterClickOnly[6]['json']['data'][0] ?? [];
-        $test->assertSame('remedora-click-url', $clickOnlyEvent['event_id'] ?? null, 'submission id can drive event id');
-
-        $remedoraNativePayload = [
-            'api_version' => '2026-04-08',
-            'event' => 'checkout.completed',
-            'occurred_at' => gmdate('c'),
-            'is_test' => false,
-            'meta' => [
-                'delivery_id' => 'remedora-delivery-1',
-                'safe_fields_only' => true,
-            ],
-            'data' => [
-                'session' => [
-                    'reference' => 'remedora-session-reference',
-                    'resume_url' => 'https://try.remedora.com/resume/remedora-session-reference',
-                ],
-                'attribution' => [
-                    'query_params' => [
-                        ['key' => 'utm_source', 'value' => 'facebook'],
-                        ['key' => 'sid', 'value' => $sid],
-                        ['key' => 'cid', 'value' => $cid],
-                    ],
-                ],
-            ],
-        ];
-        $remedoraNativeBody = json_encode($remedoraNativePayload, JSON_UNESCAPED_SLASHES) ?: '{}';
-        $remedoraTimestamp = gmdate('c');
-        $remedoraSignature = 'sha256=' . hash_hmac('sha256', $remedoraTimestamp . '.' . $remedoraNativeBody, $webhookSecret);
-        $badRemedoraSignature = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            [
-                'Content-Type' => 'application/json',
-                'X-Remedora-Event' => 'checkout.completed',
-                'X-Remedora-Signature' => 'sha256=bad',
-                'X-Remedora-Timestamp' => $remedoraTimestamp,
-            ],
-            $remedoraNativeBody
-        );
-        $test->assertSame(401, $badRemedoraSignature['status'], 'webhook rejects bad Remedora signature');
-
-        $remedoraNativeWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            [
-                'Content-Type' => 'application/json',
-                'X-Remedora-Event' => 'checkout.completed',
-                'X-Remedora-Signature' => $remedoraSignature,
-                'X-Remedora-Timestamp' => $remedoraTimestamp,
-            ],
-            $remedoraNativeBody
-        );
-        $test->assertSame(200, $remedoraNativeWebhook['status'], 'webhook accepts native Remedora signed payload');
-        $metaAfterNativeRemedora = read_jsonl($metaLog);
-        $nativeRemedoraEvent = $metaAfterNativeRemedora[7]['json']['data'][0] ?? [];
-        $test->assertSame('remedora-delivery-1', $nativeRemedoraEvent['event_id'] ?? null, 'Remedora delivery id drives CAPI idempotency');
-
-        $remedoraNativeDuplicate = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            [
-                'Content-Type' => 'application/json',
-                'X-Remedora-Event' => 'checkout.completed',
-                'X-Remedora-Signature' => $remedoraSignature,
-                'X-Remedora-Timestamp' => $remedoraTimestamp,
-            ],
-            $remedoraNativeBody
-        );
-        $remedoraNativeDuplicatePayload = json_decode($remedoraNativeDuplicate['body'], true) ?: [];
-        $test->assertSame(true, $remedoraNativeDuplicatePayload['duplicate'] ?? false, 'native Remedora duplicate is idempotent');
-        $test->assertSame(8, count(read_jsonl($metaLog)), 'native Remedora duplicate does not send another CAPI request');
+        $customFlow = complete_mock_flow($gatewayBase, $telehealthBase, 'custom-intake');
+        $test->assertSame(200, $customFlow['completion_status'], 'custom campaign flow reaches telehealth');
 
         $fallback = http_request('GET', $gatewayBase . '/c/weight-intake?ad_id=%7B%7Bad.id%7D%7D&adset_id=set-456&campaign_id=camp-789&utm_source=facebook');
         $test->assertSame(302, $fallback['status'], 'unexpanded macro click redirects');
@@ -586,70 +381,11 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $badStart = http_request('GET', $gatewayBase . '/start?cid=bad-token');
         $test->assertSame(400, $badStart['status'], 'invalid start token is rejected');
 
-        $unauthorizedWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => 'wrong', 'Content-Type' => 'application/json'],
-            json_encode(['sid' => $sid, 'event_id' => 'unauthorized'], JSON_UNESCAPED_SLASHES)
-        );
-        $test->assertSame(401, $unauthorizedWebhook['status'], 'webhook requires shared secret');
-
-        $badWebhook = http_request(
-            'POST',
-            $gatewayBase . '/capi/intake-completed',
-            ['X-Webhook-Secret' => $webhookSecret, 'Content-Type' => 'application/json'],
-            json_encode(['sid' => 'bad-token', 'event_id' => 'bad-token'], JSON_UNESCAPED_SLASHES)
-        );
-        $test->assertSame(400, $badWebhook['status'], 'webhook rejects invalid sid');
+        $removedWebhook = http_request('POST', $gatewayBase . '/capi/intake-completed', ['Content-Type' => 'application/json'], '{}');
+        $test->assertSame(404, $removedWebhook['status'], 'gateway CAPI webhook route has been removed');
 
         $notFound = http_request('GET', $gatewayBase . '/missing-route');
         $test->assertSame(404, $notFound['status'], 'unknown route returns 404');
-
-        $streamClient = new CapiClient(false, 'test-pixel', 'stream-token', 'v20.0', $metaBase, '', 'stream');
-        $streamResult = $streamClient->send([
-            'event_name' => 'Lead',
-            'event_time' => time(),
-            'event_id' => 'stream-event',
-            'action_source' => 'website',
-            'user_data' => [],
-        ]);
-        $test->assertSame(200, $streamResult['status_code'], 'stream transport can send to mock Meta');
-
-        $rawClient = new CapiClient(false, 'test-pixel', 'raw', 'v20.0', $metaBase, '', 'curl');
-        $rawResult = $rawClient->send([
-            'event_name' => 'Lead',
-            'event_time' => time(),
-            'event_id' => 'raw-response-event',
-            'action_source' => 'website',
-            'user_data' => [],
-        ]);
-        $test->assertSame('not-json', $rawResult['response']['raw'] ?? null, 'CAPI client preserves raw non-JSON responses');
-
-        try {
-            (new CapiClient(false, 'pixel', 'token', 'v20.0', 'http://127.0.0.1:1', '', 'curl'))->send([
-                'event_name' => 'Lead',
-                'event_time' => time(),
-                'event_id' => 'curl-fail',
-                'action_source' => 'website',
-                'user_data' => [],
-            ]);
-            $test->assertTrue(false, 'curl transport surfaces connection failures');
-        } catch (RuntimeException) {
-            $test->assertTrue(true, 'curl transport surfaces connection failures');
-        }
-
-        try {
-            (new CapiClient(false, 'pixel', 'token', 'v20.0', 'http://127.0.0.1:1', '', 'stream'))->send([
-                'event_name' => 'Lead',
-                'event_time' => time(),
-                'event_id' => 'stream-fail',
-                'action_source' => 'website',
-                'user_data' => [],
-            ]);
-            $test->assertTrue(false, 'stream transport surfaces connection failures');
-        } catch (RuntimeException) {
-            $test->assertTrue(true, 'stream transport surfaces connection failures');
-        }
 
         $rateLimited = false;
         for ($i = 0; $i < 100; $i++) {
@@ -692,25 +428,25 @@ function read_jsonl(string $path): array
 /**
  * @param array<string, string> $headers
  * @param array<string, string|null> $queryOverrides
- * @return array{completion_status: int, completion_body: array<string, mixed>, cid: string, sid: string}
+ * @return array{completion_status: int, completion_body: array<string, mixed>, cid: string, sid: string, form_params: array<string, string>}
  */
 function complete_mock_flow(
     string $gatewayBase,
     string $telehealthBase,
     string $campaign,
-    string $eventId,
     array $headers = [],
     array $queryOverrides = [],
 ): array {
+    $flowId = bin2hex(random_bytes(4));
     $query = [
-        'ad_id' => 'ad-' . $eventId,
-        'adset_id' => 'set-' . $eventId,
-        'campaign_id' => 'camp-' . $eventId,
+        'ad_id' => 'ad-' . $flowId,
+        'adset_id' => 'set-' . $flowId,
+        'campaign_id' => 'camp-' . $flowId,
         'utm_source' => 'facebook',
         'utm_medium' => 'paid_social',
         'utm_campaign' => 'demo',
         'utm_content' => 'ad',
-        'fbclid' => 'fbclid-' . $eventId,
+        'fbclid' => 'fbclid-' . $flowId,
     ];
 
     foreach ($queryOverrides as $key => $value) {
@@ -724,14 +460,17 @@ function complete_mock_flow(
     $click = http_request('GET', $gatewayBase . '/c/' . $campaign . '?' . http_build_query($query), $headers);
     $cid = query_params(header_value($click, 'location'))['cid'] ?? '';
     $start = http_request('GET', $gatewayBase . '/start?cid=' . rawurlencode($cid));
-    $sid = query_params(header_value($start, 'location'))['sid'] ?? '';
-    http_request('GET', header_value($start, 'location'));
-    $completion = http_request('POST', $telehealthBase . '/complete?event_id=' . rawurlencode($eventId));
+    $formLocation = header_value($start, 'location');
+    $formParams = query_params($formLocation);
+    $sid = $formParams['sid'] ?? '';
+    http_request('GET', $formLocation);
+    $completion = http_request('POST', $telehealthBase . '/complete');
 
     return [
         'completion_status' => $completion['status'],
         'completion_body' => json_decode($completion['body'], true) ?: [],
         'cid' => $cid,
         'sid' => $sid,
+        'form_params' => $formParams,
     ];
 }

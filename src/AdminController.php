@@ -281,7 +281,6 @@ final class AdminController
             . $this->input('landing_url', 'Static lander URL', (string) $campaign['landing_url'])
             . $this->input('form_url', 'Telehealth form URL', (string) $campaign['form_url'])
             . $this->input('public_fallback_url', 'Public fallback URL', (string) $campaign['public_fallback_url'])
-            . $this->input('event_source_url', 'CAPI event source URL', (string) $campaign['event_source_url'])
             . $this->textarea('allowed_domains', 'Allowed redirect domains', implode("\n", $campaign['allowed_domains']))
             . $this->textarea('required_params', 'Required Meta params', implode("\n", $campaign['required_params']))
             . $this->textarea('accepted_utm_sources', 'Accepted UTM sources', implode("\n", $campaign['accepted_utm_sources']))
@@ -289,8 +288,6 @@ final class AdminController
             . $this->input('form_token_ttl_seconds', 'Form token TTL seconds', (string) $campaign['form_token_ttl_seconds'])
             . $this->input('click_token_param', 'Click token param', (string) $campaign['click_token_param'])
             . $this->input('form_token_param', 'Form token param', (string) $campaign['form_token_param'])
-            . $this->input('capi_event_name', 'CAPI event name', (string) $campaign['capi_event_name'])
-            . $this->textarea('capi_custom_data', 'CAPI custom data JSON', json_encode($campaign['capi_custom_data'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}')
             . $this->input('fallback_title', 'Fallback title', (string) $campaign['fallback_title'])
             . $this->textarea('fallback_body', 'Fallback body', (string) $campaign['fallback_body'])
             . $this->input('intake_title', 'Intake title', (string) $campaign['intake_title'])
@@ -393,7 +390,6 @@ final class AdminController
             'landing_url' => $base . '/intake/new-intake',
             'form_url' => 'https://telehealth.example.com/intake/start',
             'public_fallback_url' => $base . '/fallback/new-intake',
-            'event_source_url' => $base . '/intake/new-intake',
             'allowed_domains' => ['127.0.0.1', 'localhost', 'telehealth.example.com'],
             'required_params' => ['ad_id', 'adset_id', 'campaign_id', 'utm_source'],
             'accepted_utm_sources' => ['facebook', 'instagram'],
@@ -401,8 +397,6 @@ final class AdminController
             'form_token_ttl_seconds' => 7200,
             'click_token_param' => 'cid',
             'form_token_param' => 'sid',
-            'capi_event_name' => 'Lead',
-            'capi_custom_data' => [],
             'fallback_title' => 'Online health intake',
             'fallback_body' => 'Review general information about this online intake pathway.',
             'intake_title' => 'Online health intake',
@@ -423,7 +417,6 @@ final class AdminController
             'landing_url' => (string) ($_POST['landing_url'] ?? ''),
             'form_url' => (string) ($_POST['form_url'] ?? ''),
             'public_fallback_url' => (string) ($_POST['public_fallback_url'] ?? ''),
-            'event_source_url' => (string) ($_POST['event_source_url'] ?? ''),
             'allowed_domains' => (string) ($_POST['allowed_domains'] ?? ''),
             'required_params' => (string) ($_POST['required_params'] ?? ''),
             'accepted_utm_sources' => (string) ($_POST['accepted_utm_sources'] ?? ''),
@@ -431,8 +424,6 @@ final class AdminController
             'form_token_ttl_seconds' => (int) ($_POST['form_token_ttl_seconds'] ?? 7200),
             'click_token_param' => (string) ($_POST['click_token_param'] ?? 'cid'),
             'form_token_param' => (string) ($_POST['form_token_param'] ?? 'sid'),
-            'capi_event_name' => (string) ($_POST['capi_event_name'] ?? 'Lead'),
-            'capi_custom_data' => (string) ($_POST['capi_custom_data'] ?? '{}'),
             'fallback_title' => (string) ($_POST['fallback_title'] ?? ''),
             'fallback_body' => (string) ($_POST['fallback_body'] ?? ''),
             'intake_title' => (string) ($_POST['intake_title'] ?? ''),

@@ -49,8 +49,6 @@ final class Database
                 adset_id TEXT,
                 meta_campaign_id TEXT,
                 fbclid TEXT,
-                fbc TEXT,
-                fbp TEXT,
                 utm_source TEXT,
                 utm_medium TEXT,
                 utm_campaign TEXT,
@@ -72,20 +70,6 @@ final class Database
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 used_at TEXT,
-                FOREIGN KEY(click_id) REFERENCES clicks(click_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS conversions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id TEXT NOT NULL UNIQUE,
-                click_id TEXT NOT NULL,
-                form_session_id TEXT,
-                campaign_slug TEXT NOT NULL,
-                event_name TEXT NOT NULL,
-                dry_run INTEGER NOT NULL DEFAULT 1,
-                meta_status_code INTEGER,
-                meta_response_json TEXT,
-                created_at TEXT NOT NULL,
                 FOREIGN KEY(click_id) REFERENCES clicks(click_id)
             );
 
@@ -121,7 +105,6 @@ final class Database
                 landing_url TEXT NOT NULL,
                 form_url TEXT NOT NULL,
                 public_fallback_url TEXT NOT NULL,
-                event_source_url TEXT NOT NULL,
                 allowed_domains_json TEXT NOT NULL,
                 required_params_json TEXT NOT NULL,
                 accepted_utm_sources_json TEXT NOT NULL,
@@ -129,8 +112,6 @@ final class Database
                 form_token_ttl_seconds INTEGER NOT NULL,
                 click_token_param TEXT NOT NULL,
                 form_token_param TEXT NOT NULL,
-                capi_event_name TEXT NOT NULL,
-                capi_custom_data_json TEXT NOT NULL,
                 fallback_title TEXT NOT NULL,
                 fallback_body TEXT NOT NULL,
                 intake_title TEXT NOT NULL,
@@ -141,7 +122,6 @@ final class Database
 
             CREATE INDEX IF NOT EXISTS clicks_campaign_created_idx ON clicks(campaign_slug, created_at);
             CREATE INDEX IF NOT EXISTS form_sessions_click_idx ON form_sessions(click_id);
-            CREATE INDEX IF NOT EXISTS conversions_click_idx ON conversions(click_id);
             CREATE INDEX IF NOT EXISTS domains_status_idx ON domains(status);
             CREATE INDEX IF NOT EXISTS campaigns_status_idx ON campaigns(status);
             SQL

@@ -11,7 +11,6 @@ return [
         'landing_url' => $baseUrl . '/intake/weight-intake',
         'form_url' => $formUrl,
         'public_fallback_url' => $baseUrl . '/fallback/weight-intake',
-        'event_source_url' => $baseUrl . '/intake/weight-intake',
         'allowed_domains' => [
             '127.0.0.1',
             'localhost',
@@ -30,8 +29,6 @@ return [
         'form_token_ttl_seconds' => 7200,
         'click_token_param' => 'cid',
         'form_token_param' => 'sid',
-        'capi_event_name' => 'Lead',
-        'capi_custom_data' => [],
         'fallback_title' => 'Online health intake',
         'fallback_body' => 'Public fallback page for the same offer.',
         'intake_title' => 'Online health intake',
@@ -42,7 +39,6 @@ return [
         'landing_url' => $baseUrl . '/intake/custom-intake',
         'form_url' => $formUrl,
         'public_fallback_url' => $baseUrl . '/fallback/custom-intake',
-        'event_source_url' => $baseUrl . '/intake/custom-intake',
         'allowed_domains' => [
             '127.0.0.1',
             'localhost',
@@ -60,10 +56,6 @@ return [
         'form_token_ttl_seconds' => 7200,
         'click_token_param' => 'cid',
         'form_token_param' => 'sid',
-        'capi_event_name' => 'Lead',
-        'capi_custom_data' => [
-            'content_name' => 'generic-intake',
-        ],
         'fallback_title' => 'Custom fallback',
         'fallback_body' => 'Public fallback page.',
         'intake_title' => 'Custom intake',
@@ -74,7 +66,6 @@ return [
         'landing_url' => $baseUrl . '/intake/bad-domains',
         'form_url' => $formUrl,
         'public_fallback_url' => $baseUrl . '/fallback/bad-domains',
-        'event_source_url' => $baseUrl . '/intake/bad-domains',
         'allowed_domains' => 'bad-config',
         'required_params' => [
             'ad_id',
@@ -85,6 +76,5 @@ return [
         'accepted_utm_sources' => [
             'facebook',
         ],
-        'capi_event_name' => 'Lead',
     ],
 ];

@@ -89,7 +89,7 @@ final class App
                 clientIp: $clientIp,
             ));
 
-            Url::assertAllowed((string) $campaign['public_fallback_url'], $this->allowedDomains($campaign));
+            Url::assertAllowed((string) $campaign['public_fallback_url'], $this->allowedFallbackDomains($campaign));
 
             return Response::redirect((string) $campaign['public_fallback_url']);
         }
@@ -253,6 +253,22 @@ final class App
         }
 
         return array_values(array_filter($domains, 'is_string'));
+    }
+
+    /**
+     * @param array<string, mixed> $campaign
+     * @return list<string>
+     */
+    private function allowedFallbackDomains(array $campaign): array
+    {
+        $domains = $this->allowedDomains($campaign);
+        $host = parse_url((string) ($campaign['public_fallback_url'] ?? ''), PHP_URL_HOST);
+
+        if (is_string($host) && $host !== '') {
+            $domains[] = $host;
+        }
+
+        return array_values(array_unique($domains));
     }
 
     /**

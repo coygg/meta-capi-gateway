@@ -68,7 +68,7 @@ After deploy:
 6. Point DNS at the portal's displayed target.
 7. Click **Verify** in the domain table.
 8. Create or edit a campaign.
-9. Set the static lander URL, Remedora form URL, and public fallback URL.
+9. Set the static lander URL, Remedora form URL, and fallback redirect URL.
 10. Copy the generated Meta ad URL from the admin dashboard into the Meta ad destination URL.
 11. Keep Remedora direct CAPI enabled. Do not configure a Remedora webhook back to this gateway.
 
@@ -185,6 +185,29 @@ https://track.yourdomain.com/start?cid=<cid from lander URL>
 - `utm_term` when present
 
 Remedora receives those query params, stores its own attribution context, and sends CAPI directly to Meta when the intake converts.
+
+## Fallback Redirects
+
+Each campaign has a **Fallback redirect URL for ineligible traffic**. This is where the gateway sends visitors when the click is missing required expanded Meta parameters or still contains unexpanded macros like `{{ad.id}}`.
+
+Examples:
+
+```text
+https://track.yourdomain.com/fallback/weight-intake
+https://www.google.com/
+https://yourbrand.com/general-info
+```
+
+The fallback URL can be external. You do not need to add the fallback host to **Allowed lander and form redirect domains**; the gateway automatically allows the configured fallback URL for ineligible-click redirects. The allowed-domain list still protects the static lander and Remedora form redirects.
+
+The eligibility check is not a Facebook login or cryptographic proof from Meta. It is based on whether Meta expanded the ad URL parameters configured for the campaign. The default required parameters are:
+
+- `ad_id`
+- `adset_id`
+- `campaign_id`
+- `utm_source`
+
+Traffic is considered eligible when those parameters are present, not empty, not still in `{{macro}}` form, and `utm_source` matches the campaign's accepted sources such as `facebook` or `instagram`. Eligible clicks receive a short-lived signed `cid`; `/start` only opens the Remedora form when that signed click token maps back to a recorded eligible click.
 
 ## DNS
 

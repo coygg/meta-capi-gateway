@@ -194,7 +194,7 @@ function run_e2e_tests(TestHarness $test, string $root): void
             'status' => 'active',
             'landing_url' => $gatewayBase . '/intake/portal-intake',
             'form_url' => $telehealthBase . '/intake/start',
-            'public_fallback_url' => $gatewayBase . '/fallback/portal-intake',
+            'public_fallback_url' => 'https://google.com/',
             'allowed_domains' => "127.0.0.1\nlocalhost",
             'required_params' => "ad_id\nadset_id\ncampaign_id\nutm_source",
             'accepted_utm_sources' => "facebook\ninstagram",
@@ -265,6 +265,10 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $portalClick = http_request('GET', $gatewayBase . '/c/portal-intake?ad_id=portal-ad&adset_id=portal-set&campaign_id=portal-camp&utm_source=facebook&fbclid=portal-fbclid');
         $test->assertSame(302, $portalClick['status'], 'portal-created DB campaign accepts ad click');
         $test->assertContains('/intake/portal-intake', header_value($portalClick, 'location'), 'portal-created DB campaign redirects to configured lander');
+
+        $portalFallback = http_request('GET', $gatewayBase . '/c/portal-intake?ad_id={{ad.id}}&adset_id=portal-set&campaign_id=portal-camp&utm_source=facebook');
+        $test->assertSame(302, $portalFallback['status'], 'portal-created DB campaign redirects ineligible click');
+        $test->assertSame('https://google.com/', header_value($portalFallback, 'location'), 'campaign fallback can point to an external URL without adding it to allowed domains');
 
         $logout = http_request(
             'POST',

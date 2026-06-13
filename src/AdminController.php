@@ -294,8 +294,8 @@ final class AdminController
             . $this->select('status', 'Status', (string) $campaign['status'], ['active' => 'Active', 'paused' => 'Paused'])
             . $this->input('landing_url', 'Static lander URL', (string) $campaign['landing_url'])
             . $this->input('form_url', 'Telehealth form URL', (string) $campaign['form_url'])
-            . $this->input('public_fallback_url', 'Public fallback URL', (string) $campaign['public_fallback_url'])
-            . $this->textarea('allowed_domains', 'Allowed redirect domains', implode("\n", $campaign['allowed_domains']))
+            . $this->input('public_fallback_url', 'Fallback redirect URL for ineligible traffic', (string) $campaign['public_fallback_url'])
+            . $this->textarea('allowed_domains', 'Allowed lander and form redirect domains', implode("\n", $campaign['allowed_domains']))
             . $this->textarea('required_params', 'Required Meta params', implode("\n", $campaign['required_params']))
             . $this->textarea('accepted_utm_sources', 'Accepted UTM sources', implode("\n", $campaign['accepted_utm_sources']))
             . $this->input('click_token_ttl_seconds', 'Click token TTL seconds', (string) $campaign['click_token_ttl_seconds'])
@@ -392,7 +392,7 @@ final class AdminController
             . '<li><strong>Add a tracking domain.</strong> Use the HTTPS host visitors will click, such as <code>track.yourdomain.com</code>.</li>'
             . '<li><strong>Point DNS.</strong> Use a CNAME for platform aliases, or an A/AAAA record when self-hosting this exact domain with Caddy.</li>'
             . '<li><strong>Verify DNS.</strong> Click Verify after DNS is live so generated ad URLs use the tracking domain automatically.</li>'
-            . '<li><strong>Create a campaign.</strong> Enter the static lander URL, Remedora form URL, public fallback URL, and allowed redirect domains.</li>'
+            . '<li><strong>Create a campaign.</strong> Enter the static lander URL, Remedora form URL, fallback redirect URL, and allowed lander/form domains.</li>'
             . '<li><strong>Copy the Meta ad URL.</strong> Paste the generated URL into Meta so ad clicks arrive with expanded ad IDs, UTMs, and <code>fbclid</code>.</li>'
             . '<li><strong>Keep Remedora CAPI on.</strong> This gateway only preserves attribution; Remedora sends conversion events directly to Meta.</li>'
             . '</ol></section>';

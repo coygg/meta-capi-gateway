@@ -58,4 +58,24 @@ final class AdminRepository
 
         return $valid;
     }
+
+    public function walkthroughCompleted(): bool
+    {
+        $statement = $this->pdo->query('SELECT walkthrough_completed_at FROM admin_users ORDER BY id ASC LIMIT 1');
+        $completedAt = $statement->fetchColumn();
+
+        return is_string($completedAt) && $completedAt !== '';
+    }
+
+    public function completeWalkthrough(): void
+    {
+        $statement = $this->pdo->prepare(
+            'UPDATE admin_users SET walkthrough_completed_at = :completed_at, updated_at = :updated_at WHERE id = (SELECT id FROM admin_users ORDER BY id ASC LIMIT 1)'
+        );
+        $now = ClickRepository::now();
+        $statement->execute([
+            ':completed_at' => $now,
+            ':updated_at' => $now,
+        ]);
+    }
 }

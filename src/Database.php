@@ -83,6 +83,7 @@ final class Database
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                walkthrough_completed_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -126,5 +127,21 @@ final class Database
             CREATE INDEX IF NOT EXISTS campaigns_status_idx ON campaigns(status);
             SQL
         );
+
+        $this->ensureColumn('admin_users', 'walkthrough_completed_at', 'TEXT');
+    }
+
+    private function ensureColumn(string $table, string $column, string $definition): void
+    {
+        $statement = $this->pdo->query('PRAGMA table_info(' . $table . ')');
+        $rows = $statement === false ? [] : $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            if (($row['name'] ?? null) === $column) {
+                return;
+            }
+        }
+
+        $this->pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
     }
 }

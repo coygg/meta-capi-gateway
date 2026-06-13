@@ -137,6 +137,9 @@ function run_unit_tests(TestHarness $test, string $root): void
     $adminRepo = new AdminRepository($database->pdo());
     $test->assertSame(false, $adminRepo->verifyPassword('missing-admin'), 'admin password check fails when no admin exists');
     $adminRepo->createAdmin('unit-admin-password');
+    $test->assertSame(false, $adminRepo->walkthroughCompleted(), 'new admin has not completed walkthrough');
+    $adminRepo->completeWalkthrough();
+    $test->assertSame(true, $adminRepo->walkthroughCompleted(), 'admin walkthrough completion is stored');
     $test->assertSame(false, $adminRepo->verifyPassword('wrong-password'), 'admin password check rejects wrong password');
     $test->assertSame(true, $adminRepo->verifyPassword('unit-admin-password'), 'admin password check accepts correct password');
     try {
@@ -164,6 +167,29 @@ function run_unit_tests(TestHarness $test, string $root): void
     $test->assertSame('unit-click', $repo->findClick('unit-click')['click_id'] ?? null, 'repository stores clicks');
     $repo->createFormSession('unit-session', 'unit-click', 'weight-intake', gmdate('c', time() + 60));
     $test->assertSame('unit-session', $repo->findFormSession('unit-session')['session_id'] ?? null, 'repository stores form sessions');
+
+    $legacyAdminDb = $root . '/tests/.runtime/unit/legacy-admin.sqlite';
+    $legacyPdo = new PDO('sqlite:' . $legacyAdminDb);
+    $legacyPdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $legacyPdo->exec(
+        "CREATE TABLE admin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )"
+    );
+    $legacyPdo = null;
+    putenv('DB_PATH=' . $legacyAdminDb);
+    Database::fromConfig($root, Config::load($root))->migrate();
+    $legacyCheck = new PDO('sqlite:' . $legacyAdminDb);
+    $legacyColumns = array_map(
+        static fn (array $row): string => (string) ($row['name'] ?? ''),
+        $legacyCheck->query('PRAGMA table_info(admin_users)')->fetchAll(PDO::FETCH_ASSOC)
+    );
+    $test->assertTrue(in_array('walkthrough_completed_at', $legacyColumns, true), 'migration adds walkthrough flag to legacy admin table');
+    putenv('DB_PATH=' . $tmp);
 
     $limiter = new RateLimiter($database->pdo());
     $test->assertSame(false, $limiter->exceeded('unit-limit', 2, 60), 'rate limiter permits first hit');
@@ -218,8 +244,13 @@ function run_unit_tests(TestHarness $test, string $root): void
     $campaignRepo = new CampaignRepository($database->pdo());
     $_SESSION = ['admin_authenticated' => true];
     $emptyAdmin = new AdminController($config, $adminRepo, $domainRepo, $campaignRepo);
+    $database->pdo()->exec('UPDATE admin_users SET walkthrough_completed_at = NULL');
     $emptyDashboard = $emptyAdmin->handle('GET', '/admin');
+    $test->assertContains('Quick setup walkthrough', $responseBody($emptyDashboard), 'admin dashboard renders first-run walkthrough');
     $test->assertContains('No campaigns yet.', $responseBody($emptyDashboard), 'admin dashboard handles empty campaign database');
+    $adminRepo->completeWalkthrough();
+    $hiddenWalkthroughDashboard = $emptyAdmin->handle('GET', '/admin');
+    $test->assertTrue(!str_contains($responseBody($hiddenWalkthroughDashboard), 'Quick setup walkthrough'), 'admin dashboard hides completed walkthrough');
     $newCampaignResponse = $emptyAdmin->handle('GET', '/admin/campaigns/new');
     $test->assertContains('href="/admin">Cancel</a>', $responseBody($newCampaignResponse), 'admin campaign form renders cancel link');
     $_SESSION = [];

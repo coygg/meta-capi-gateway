@@ -103,8 +103,22 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $dashboard = http_request('GET', $gatewayBase . '/admin', ['Cookie' => $adminCookie]);
         $test->assertSame(200, $dashboard['status'], 'admin dashboard renders after setup');
         $test->assertContains('Domains', $dashboard['body'], 'admin dashboard lists domain section');
+        $test->assertContains('Quick setup walkthrough', $dashboard['body'], 'first admin dashboard shows walkthrough');
+        $test->assertContains('Keep Remedora CAPI on', $dashboard['body'], 'walkthrough explains Remedora remains CAPI sender');
         $csrf = csrf_from_body($dashboard['body']);
         $test->assertTrue($csrf !== '', 'admin dashboard includes CSRF token');
+
+        $dismissWalkthrough = http_request(
+            'POST',
+            $gatewayBase . '/admin/walkthrough/dismiss',
+            ['Content-Type' => 'application/x-www-form-urlencoded', 'Cookie' => $adminCookie],
+            http_build_query(['_csrf' => $csrf])
+        );
+        $test->assertSame(302, $dismissWalkthrough['status'], 'admin can dismiss first-run walkthrough');
+
+        $dashboardAfterWalkthrough = http_request('GET', $gatewayBase . '/admin', ['Cookie' => $adminCookie]);
+        $test->assertTrue(!str_contains($dashboardAfterWalkthrough['body'], 'Quick setup walkthrough'), 'walkthrough stays hidden after dismissal');
+        $csrf = csrf_from_body($dashboardAfterWalkthrough['body']);
 
         $addDomainBadCsrf = http_request(
             'POST',

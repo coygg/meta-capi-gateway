@@ -48,6 +48,10 @@ final class AdminController
             return $this->dashboard();
         }
 
+        if ($method === 'POST' && $path === '/admin/walkthrough/dismiss') {
+            return $this->walkthroughDismiss();
+        }
+
         if ($method === 'POST' && $path === '/admin/domains') {
             return $this->domainAdd();
         }
@@ -214,6 +218,7 @@ final class AdminController
         }
 
         $body = $flash
+            . $this->walkthrough()
             . '<section><h2>Domains</h2>'
             . '<p>Add a tracking domain, then point its CNAME to <code>' . $this->e($target) . '</code>.</p>'
             . '<form method="post" action="/admin/domains" class="inline">' . $this->csrfField()
@@ -225,6 +230,15 @@ final class AdminController
             . '<form method="post" action="/admin/logout">' . $this->csrfField() . '<button type="submit" class="link">Log out</button></form>';
 
         return Response::html($this->layout('Admin', $body));
+    }
+
+    private function walkthroughDismiss(): Response
+    {
+        $this->assertCsrf();
+        $this->admins->completeWalkthrough();
+        $this->flash('Walkthrough dismissed.');
+
+        return Response::redirect('/admin');
     }
 
     private function domainAdd(): Response
@@ -362,6 +376,25 @@ final class AdminController
     private function notice(string $message): string
     {
         return '<div class="notice">' . $this->e($message) . '</div>';
+    }
+
+    private function walkthrough(): string
+    {
+        if ($this->admins->walkthroughCompleted()) {
+            return '';
+        }
+
+        return '<section class="walkthrough"><div class="split"><div><h2>Quick setup walkthrough</h2>'
+            . '<p>Follow these steps once, then use the generated Meta ad URL for each campaign.</p></div>'
+            . '<form method="post" action="/admin/walkthrough/dismiss">' . $this->csrfField()
+            . '<button type="submit" class="secondary">Dismiss</button></form></div>'
+            . '<ol class="steps">'
+            . '<li><strong>Add a tracking domain.</strong> Use a host like <code>track.yourdomain.com</code>, then point its CNAME to the target shown below.</li>'
+            . '<li><strong>Verify DNS.</strong> Click Verify after the CNAME is live so generated ad URLs use the tracking domain automatically.</li>'
+            . '<li><strong>Create a campaign.</strong> Enter the static lander URL, Remedora form URL, public fallback URL, and allowed redirect domains.</li>'
+            . '<li><strong>Copy the Meta ad URL.</strong> Paste the generated URL into Meta so ad clicks arrive with expanded ad IDs, UTMs, and <code>fbclid</code>.</li>'
+            . '<li><strong>Keep Remedora CAPI on.</strong> This gateway only preserves attribution; Remedora sends conversion events directly to Meta.</li>'
+            . '</ol></section>';
     }
 
     private function authForm(string $action, string $title, string $button, bool $showConfirmation = false): string
@@ -515,6 +548,10 @@ final class AdminController
                 .notice { border: 1px solid #d8c785; background: #fff7d6; padding: 12px; border-radius: 6px; margin-bottom: 18px; }
                 .pill { display: inline-block; background: #e9f0f5; border-radius: 999px; padding: 3px 8px; font-size: 13px; }
                 .narrow { max-width: 460px; margin: 7vh auto; }
+                .walkthrough { border-color: #b7d3e8; background: #f7fbfe; }
+                .walkthrough p { margin-bottom: 0; color: #51616f; }
+                .steps { margin: 18px 0 0; padding-left: 22px; }
+                .steps li { margin: 10px 0; line-height: 1.5; }
             </style>
         </head>
         <body>

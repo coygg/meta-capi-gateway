@@ -51,13 +51,14 @@ After deploy:
 1. Open the Render URL.
 2. Go to `/admin`.
 3. Create the first admin password.
-4. Add a tracking domain, such as `track.yourdomain.com`.
-5. Point that domain's CNAME to the portal's displayed target.
-6. Click **Verify** in the domain table.
-7. Create or edit a campaign.
-8. Set the static lander URL, Remedora form URL, and public fallback URL.
-9. Copy the generated Meta ad URL from the admin dashboard into the Meta ad destination URL.
-10. Keep Remedora direct CAPI enabled. Do not configure a Remedora webhook back to this gateway.
+4. Follow the quick setup walkthrough shown at the top of the admin dashboard.
+5. Add a tracking domain, such as `track.yourdomain.com`.
+6. Point that domain's CNAME to the portal's displayed target.
+7. Click **Verify** in the domain table.
+8. Create or edit a campaign.
+9. Set the static lander URL, Remedora form URL, and public fallback URL.
+10. Copy the generated Meta ad URL from the admin dashboard into the Meta ad destination URL.
+11. Keep Remedora direct CAPI enabled. Do not configure a Remedora webhook back to this gateway.
 
 ## Runway Or Wizard Deploys
 
@@ -153,6 +154,7 @@ composer test:coverage
 The E2E test simulates:
 
 - first-run admin setup
+- first-run dashboard walkthrough and dismissal
 - domain portal actions
 - campaign creation and editing
 - a valid Meta ad click

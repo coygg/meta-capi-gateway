@@ -4,16 +4,6 @@ PHP 8.2+ gateway for Remedora-style Meta ad funnels. It protects the downstream 
 
 This app does **not** send CAPI events to Meta. Keep Remedora's built-in CAPI enabled and let Remedora send conversions directly.
 
-## Gateway CAPI Removed
-
-There is no gateway-side Meta CAPI setup anymore:
-
-- No Meta pixel/dataset ID is required.
-- No Meta access token is required.
-- No intake webhook secret is required.
-- No `/capi/intake-completed` integration is required.
-- Remedora remains the conversion sender through its own direct Meta CAPI connection.
-
 The gateway only protects routing and preserves attribution parameters until the visitor reaches Remedora.
 
 ## What It Does

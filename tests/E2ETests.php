@@ -326,6 +326,7 @@ function run_e2e_tests(TestHarness $test, string $root): void
 
         $cookieStart = http_request('GET', $gatewayBase . '/start', ['Cookie' => cookie_header($validClick)]);
         $test->assertSame(302, $cookieStart['status'], 'start can use protected click cookie when cid query is absent');
+        $cookieStartLocation = header_value($cookieStart, 'location');
 
         $lander = http_request('GET', $landingLocation);
         $test->assertSame(200, $lander['status'], 'static intake lander renders');
@@ -334,6 +335,7 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $start = http_request('GET', $gatewayBase . '/start?cid=' . rawurlencode($cid));
         $test->assertSame(302, $start['status'], 'start endpoint redirects to telehealth platform');
         $formLocation = header_value($start, 'location');
+        $test->assertSame($cookieStartLocation, $formLocation, 'repeated start for one click reuses the same form handoff URL');
         $test->assertContains($telehealthBase . '/intake/start', $formLocation, 'form redirect points to mock telehealth');
         $formParams = query_params($formLocation);
         $sid = $formParams['sid'] ?? '';

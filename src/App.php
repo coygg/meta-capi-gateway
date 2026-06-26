@@ -141,17 +141,25 @@ final class App
             return Response::json(['error' => 'click_not_found'], 404);
         }
 
-        $sessionId = bin2hex(random_bytes(16));
+        $existingSession = $this->repository->findActiveFormSessionForClick($clickId, ClickRepository::now());
         $ttl = (int) ($campaign['form_token_ttl_seconds'] ?? 7200);
-        $expiresAt = gmdate('c', time() + $ttl);
-        $formToken = $this->tokens->sign([
-            'type' => 'form',
-            'session_id' => $sessionId,
-            'click_id' => $clickId,
-            'campaign' => $slug,
-        ], $ttl);
 
-        $this->repository->createFormSession($sessionId, $clickId, $slug, $expiresAt);
+        if ($existingSession !== null) {
+            $sessionId = (string) $existingSession['session_id'];
+            $formToken = (string) $existingSession['form_token'];
+            $ttl = $this->remainingTtl((string) $existingSession['expires_at'], $ttl);
+        } else {
+            $sessionId = bin2hex(random_bytes(16));
+            $expiresAt = gmdate('c', time() + $ttl);
+            $formToken = $this->tokens->sign([
+                'type' => 'form',
+                'session_id' => $sessionId,
+                'click_id' => $clickId,
+                'campaign' => $slug,
+            ], $ttl);
+
+            $this->repository->createFormSession($sessionId, $formToken, $clickId, $slug, $expiresAt);
+        }
 
         $formUrl = Url::appendQuery(
             (string) $campaign['form_url'],
@@ -163,6 +171,17 @@ final class App
         return Response::redirect($formUrl, 302, [
             'Set-Cookie' => Cookie::make('pj_form', $formToken, $ttl, $this->config->bool('cookie_secure', true)),
         ]);
+    }
+
+    private function remainingTtl(string $expiresAt, int $fallbackTtl): int
+    {
+        $expires = strtotime($expiresAt);
+
+        if ($expires === false) {
+            return max(1, $fallbackTtl);
+        }
+
+        return max(1, $expires - time());
     }
 
     private function fallbackPage(string $slug): Response

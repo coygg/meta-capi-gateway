@@ -165,8 +165,10 @@ function run_unit_tests(TestHarness $test, string $root): void
         'created_at' => ClickRepository::now(),
     ]);
     $test->assertSame('unit-click', $repo->findClick('unit-click')['click_id'] ?? null, 'repository stores clicks');
-    $repo->createFormSession('unit-session', 'unit-click', 'weight-intake', gmdate('c', time() + 60));
+    $repo->createFormSession('unit-session', 'unit-form-token', 'unit-click', 'weight-intake', gmdate('c', time() + 60));
     $test->assertSame('unit-session', $repo->findFormSession('unit-session')['session_id'] ?? null, 'repository stores form sessions');
+    $test->assertSame('unit-form-token', $repo->findActiveFormSessionForClick('unit-click', ClickRepository::now())['form_token'] ?? null, 'repository finds reusable active form session');
+    $test->assertSame(null, $repo->findActiveFormSessionForClick('unit-click', gmdate('c', time() + 120)), 'repository ignores expired form sessions');
 
     $legacyAdminDb = $root . '/tests/.runtime/unit/legacy-admin.sqlite';
     $legacyPdo = new PDO('sqlite:' . $legacyAdminDb);
@@ -293,6 +295,8 @@ function run_unit_tests(TestHarness $test, string $root): void
 
         return $reflection->invoke($app, ...$args);
     };
+
+    $test->assertSame(7200, $callAppPrivate($fallbackConfigApp, 'remainingTtl', 'not-a-date', 7200), 'remaining TTL falls back when stored expiry is malformed');
 
     $forwardParams = $callAppPrivate($fallbackConfigApp, 'formForwardParams', [
         'form_token_param' => 'form_ref',

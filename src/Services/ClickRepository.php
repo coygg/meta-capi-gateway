@@ -71,19 +71,37 @@ final class ClickRepository
         return is_array($row) ? $row : null;
     }
 
-    public function createFormSession(string $sessionId, string $clickId, string $campaignSlug, string $expiresAt): void
+    public function createFormSession(string $sessionId, string $formToken, string $clickId, string $campaignSlug, string $expiresAt): void
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO form_sessions (session_id, click_id, campaign_slug, created_at, expires_at) VALUES (:session_id, :click_id, :campaign_slug, :created_at, :expires_at)'
+            'INSERT INTO form_sessions (session_id, form_token, click_id, campaign_slug, created_at, expires_at) VALUES (:session_id, :form_token, :click_id, :campaign_slug, :created_at, :expires_at)'
         );
 
         $statement->execute([
             ':session_id' => $sessionId,
+            ':form_token' => $formToken,
             ':click_id' => $clickId,
             ':campaign_slug' => $campaignSlug,
             ':created_at' => self::now(),
             ':expires_at' => $expiresAt,
         ]);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function findActiveFormSessionForClick(string $clickId, string $now): ?array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT * FROM form_sessions WHERE click_id = :click_id AND expires_at > :now AND form_token IS NOT NULL AND form_token != "" ORDER BY id DESC LIMIT 1'
+        );
+        $statement->execute([
+            ':click_id' => $clickId,
+            ':now' => $now,
+        ]);
+        $row = $statement->fetch();
+
+        return is_array($row) ? $row : null;
     }
 
     /**

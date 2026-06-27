@@ -65,6 +65,7 @@ final class Database
             CREATE TABLE IF NOT EXISTS form_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL UNIQUE,
+                form_token TEXT NOT NULL,
                 click_id TEXT NOT NULL,
                 campaign_slug TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -129,6 +130,7 @@ final class Database
         );
 
         $this->ensureColumn('admin_users', 'walkthrough_completed_at', 'TEXT');
+        $this->ensureColumn('form_sessions', 'form_token', 'TEXT');
     }
 
     private function ensureColumn(string $table, string $column, string $definition): void

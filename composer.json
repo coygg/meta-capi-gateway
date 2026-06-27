@@ -4,12 +4,15 @@
   "type": "project",
   "require": {
     "php": ">=8.2",
+    "ext-curl": "*",
     "ext-pdo": "*",
     "ext-json": "*"
   },
   "scripts": {
+    "lint": "php tools/lint.php",
+    "test:unit": "php tests/run.php --unit",
     "test": "php tests/run.php",
-    "test:coverage": "php -d pcov.enabled=1 -d pcov.directory=. tests/run.php --coverage",
+    "test:coverage": "php -d pcov.enabled=1 -d pcov.directory=. tests/run.php --coverage --min-coverage=100",
     "serve": "php -S 127.0.0.1:8080 -t public"
   }
 }

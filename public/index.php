@@ -14,6 +14,8 @@ use Gateway\Services\ClickValidator;
 use Gateway\Services\DomainRepository;
 use Gateway\Services\RateLimiter;
 use Gateway\Services\TokenService;
+use Gateway\Services\UpdateRepository;
+use Gateway\Services\UpdateService;
 
 $root = dirname(__DIR__);
 
@@ -40,6 +42,7 @@ $pdo = $database->pdo();
 $adminRepository = new AdminRepository($pdo);
 $domainRepository = new DomainRepository($pdo, $config);
 $campaignRepository = new CampaignRepository($pdo);
+$updateRepository = new UpdateRepository($pdo);
 $campaignRepository->seedFromConfig($config->campaigns());
 
 $app = new App(
@@ -49,7 +52,7 @@ $app = new App(
     tokens: new TokenService($config->appSecret()),
     validator: new ClickValidator(),
     limiter: new RateLimiter($pdo),
-    admin: new AdminController($config, $adminRepository, $domainRepository, $campaignRepository),
+    admin: new AdminController($config, $adminRepository, $domainRepository, $campaignRepository, $updateRepository, new UpdateService()),
 );
 
 $app->handle()->send();

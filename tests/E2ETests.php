@@ -105,8 +105,22 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $test->assertContains('Domains', $dashboard['body'], 'admin dashboard lists domain section');
         $test->assertContains('Quick setup walkthrough', $dashboard['body'], 'first admin dashboard shows walkthrough');
         $test->assertContains('Keep Remedora CAPI on', $dashboard['body'], 'walkthrough explains Remedora remains CAPI sender');
+        $test->assertContains('Updates', $dashboard['body'], 'admin dashboard includes the update panel');
         $csrf = csrf_from_body($dashboard['body']);
         $test->assertTrue($csrf !== '', 'admin dashboard includes CSRF token');
+
+        $saveUpdateSettings = http_request(
+            'POST',
+            $gatewayBase . '/admin/updates/settings',
+            ['Content-Type' => 'application/x-www-form-urlencoded', 'Cookie' => $adminCookie],
+            http_build_query([
+                '_csrf' => $csrf,
+                'repo_url' => 'coygg/meta-capi-gateway',
+                'branch' => 'main',
+                'deploy_hook_url' => 'https://api.render.com/deploy/srv-demo?key=secret',
+            ])
+        );
+        $test->assertSame(302, $saveUpdateSettings['status'], 'admin can save update settings in the portal');
 
         $dismissWalkthrough = http_request(
             'POST',

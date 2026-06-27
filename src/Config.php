@@ -45,6 +45,7 @@ final class Config
                 'cname_target' => Env::get('GATEWAY_CNAME_TARGET', ''),
                 'cookie_secure' => Env::bool('COOKIE_SECURE', true),
                 'trust_proxy' => Env::bool('TRUST_PROXY', false),
+                'version' => (string) Env::get('APP_VERSION', (string) Env::get('RENDER_GIT_COMMIT', '')),
             ],
         );
     }

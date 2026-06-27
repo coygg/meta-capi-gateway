@@ -62,6 +62,28 @@ After deploy:
 10. Copy the generated Meta ad URL from the admin dashboard into the Meta ad destination URL.
 11. Keep Remedora direct CAPI enabled. Do not configure a Remedora webhook back to this gateway.
 
+## Updating Existing One-Click Deploys
+
+Existing one-click users should update from the admin portal, not by creating a fresh Render service.
+
+Recommended setup:
+
+1. Open Render.
+2. Select the `meta-attribution-gateway` service.
+3. Create or copy the service's deploy hook URL.
+4. Open the gateway `/admin` page.
+5. In **Updates**, paste the deploy hook URL and save.
+
+When new commits are pushed to the configured GitHub branch:
+
+1. Open `/admin`.
+2. Click **Check GitHub** to see the latest commit.
+3. Click **Deploy latest commit**.
+
+The deploy hook asks the hosting platform to rebuild the existing service from Git. The persistent disk remains mounted, so the admin password, domains, campaigns, and SQLite data stay intact.
+
+Do **not** create a new one-click deploy unless you intentionally want a fresh install with an empty database.
+
 ## Runway Or Wizard Deploys
 
 If your deploy platform provides a wizard, it can prefill almost everything from the blueprint:
@@ -74,6 +96,13 @@ If your deploy platform provides a wizard, it can prefill almost everything from
 - Optionally set `GATEWAY_CNAME_TARGET` if the platform has a fixed CNAME target.
 
 The wizard does not need to ask users for Meta credentials. Domains and campaigns are configured later in `/admin`.
+
+For updates, the wizard should either:
+
+- Create a deploy hook automatically and prefill it in the admin update settings, or
+- Show the user where to copy the deploy hook so they can paste it into `/admin`.
+
+The app can then trigger future redeploys from the **Updates** panel without asking non-technical users to edit environment variables.
 
 ## HTTPS / SSL
 

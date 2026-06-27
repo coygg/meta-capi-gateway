@@ -14,6 +14,8 @@ use Gateway\Services\ClickValidator;
 use Gateway\Services\DomainRepository;
 use Gateway\Services\RateLimiter;
 use Gateway\Services\TokenService;
+use Gateway\Services\UpdateRepository;
+use Gateway\Services\UpdateService;
 use Gateway\Support\Cookie;
 use Gateway\Support\Response;
 use Gateway\Support\Url;
@@ -117,6 +119,11 @@ function run_unit_tests(TestHarness $test, string $root): void
     $renderUrlConfig = Config::load($root);
     $test->assertSame('https://render-generated.example.com', $renderUrlConfig->string('base_url'), 'config uses Render external URL when APP_BASE_URL is unset');
     putenv('RENDER_EXTERNAL_URL');
+
+    putenv('APP_VERSION=unit-version-sha');
+    $versionConfig = Config::load($root);
+    $test->assertSame('unit-version-sha', $versionConfig->string('version'), 'config exposes the deployed app version when provided');
+    putenv('APP_VERSION');
 
     putenv('DB_PATH=tests/.runtime/unit/relative-db.sqlite');
     $relativeDbConfig = Config::load($root);
@@ -243,19 +250,158 @@ function run_unit_tests(TestHarness $test, string $root): void
     putenv('APP_BASE_URL=http://127.0.0.1:18080');
     putenv('GATEWAY_CNAME_TARGET=');
 
+    $updateRepo = new UpdateRepository($database->pdo());
+    $defaultUpdateSettings = $updateRepo->settings();
+    $test->assertSame('https://github.com/coygg/meta-capi-gateway', $defaultUpdateSettings['repo_url'], 'update repository has a default GitHub repo');
+    $test->assertSame('main', $defaultUpdateSettings['branch'], 'update repository has a default branch');
+    $updateRepo->saveSettings('coygg/meta-capi-gateway', 'main', '');
+    $test->assertSame('https://github.com/coygg/meta-capi-gateway', $updateRepo->settings()['repo_url'], 'update repository normalizes owner/repo shorthand');
+    $updateRepo->saveSettings('https://github.com/coygg/meta-capi-gateway.git', 'release/main', 'https://api.render.com/deploy/srv-demo?key=secret');
+    $savedUpdateSettings = $updateRepo->settings();
+    $test->assertSame('https://github.com/coygg/meta-capi-gateway', $savedUpdateSettings['repo_url'], 'update repository strips .git suffixes');
+    $test->assertSame('release/main', $savedUpdateSettings['branch'], 'update repository stores branch names');
+    $test->assertSame('https://api.render.com/deploy/srv-demo?key=secret', $savedUpdateSettings['deploy_hook_url'], 'update repository stores deploy hook URLs');
+    $updateRepo->markLatestCommit(str_repeat('a', 40), 'https://github.com/coygg/meta-capi-gateway/commit/' . str_repeat('a', 40));
+    $test->assertSame(str_repeat('a', 40), $updateRepo->settings()['latest_commit_sha'], 'update repository stores latest checked commit');
+    $updateRepo->markDeployTriggered(202);
+    $test->assertSame('HTTP 202', $updateRepo->settings()['last_deploy_status'], 'update repository records successful deploy requests');
+    $updateRepo->markDeployFailed(str_repeat('x', 300));
+    $test->assertSame(240, strlen($updateRepo->settings()['last_deploy_status']), 'update repository truncates long deploy failures');
+
+    foreach ([
+        ['repo' => '', 'branch' => 'main', 'hook' => '', 'message' => 'update repository rejects empty repo'],
+        ['repo' => 'http://github.com/coygg/meta-capi-gateway', 'branch' => 'main', 'hook' => '', 'message' => 'update repository rejects non-HTTPS repo'],
+        ['repo' => 'https://github.com/coygg', 'branch' => 'main', 'hook' => '', 'message' => 'update repository rejects repo without owner/name'],
+        ['repo' => 'https://github.com/coygg/meta-capi-gateway', 'branch' => '', 'hook' => '', 'message' => 'update repository rejects empty branch'],
+        ['repo' => 'https://github.com/coygg/meta-capi-gateway', 'branch' => '../main', 'hook' => '', 'message' => 'update repository rejects unsafe branch'],
+        ['repo' => 'https://github.com/coygg/meta-capi-gateway', 'branch' => 'main', 'hook' => 'http://example.com/hook', 'message' => 'update repository rejects non-HTTPS deploy hooks'],
+    ] as $case) {
+        try {
+            $updateRepo->saveSettings($case['repo'], $case['branch'], $case['hook']);
+            $test->assertTrue(false, $case['message']);
+        } catch (InvalidArgumentException) {
+            $test->assertTrue(true, $case['message']);
+        }
+    }
+
+    $serviceCalls = [];
+    $updateService = new UpdateService(static function (string $method, string $url, array $headers, ?string $body) use (&$serviceCalls): array {
+        $serviceCalls[] = compact('method', 'url', 'headers', 'body');
+
+        if ($method === 'POST') {
+            return ['status' => 202, 'body' => 'deploy queued'];
+        }
+
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'sha' => str_repeat('b', 40),
+                'html_url' => 'https://github.com/coygg/meta-capi-gateway/commit/' . str_repeat('b', 40),
+            ], JSON_THROW_ON_ERROR),
+        ];
+    });
+    $latestCommit = $updateService->latestCommit('https://github.com/coygg/meta-capi-gateway.git', 'main');
+    $test->assertSame(str_repeat('b', 40), $latestCommit['sha'], 'update service parses latest GitHub commit');
+    $test->assertSame('bbbbbbb', $latestCommit['short_sha'], 'update service exposes short commit sha');
+    $deployResult = $updateService->triggerDeploy('https://api.render.com/deploy/srv-demo?key=secret');
+    $test->assertSame(202, $deployResult['status'], 'update service triggers deploy hooks');
+    $test->assertSame('GET', $serviceCalls[0]['method'] ?? null, 'update service checks GitHub with GET');
+    $test->assertSame('POST', $serviceCalls[1]['method'] ?? null, 'update service triggers deploy hook with POST');
+
+    foreach ([
+        ['service' => new UpdateService(static fn (): array => ['status' => 500, 'body' => '{}']), 'method' => 'latest', 'message' => 'update service rejects failed GitHub checks'],
+        ['service' => new UpdateService(static fn (): array => ['status' => 200, 'body' => '{}']), 'method' => 'latest', 'message' => 'update service rejects malformed GitHub responses'],
+        ['service' => $updateService, 'method' => 'latest_bad_repo', 'message' => 'update service rejects non-GitHub repos'],
+        ['service' => $updateService, 'method' => 'latest_missing_repo', 'message' => 'update service rejects incomplete GitHub repos'],
+        ['service' => $updateService, 'method' => 'deploy_empty', 'message' => 'update service requires deploy hook before deploy'],
+        ['service' => $updateService, 'method' => 'deploy_bad_url', 'message' => 'update service rejects invalid deploy hook URLs'],
+        ['service' => new UpdateService(static fn (): array => ['status' => 500, 'body' => 'nope']), 'method' => 'deploy_failed', 'message' => 'update service rejects failed deploy hooks'],
+    ] as $case) {
+        try {
+            if ($case['method'] === 'latest') {
+                $case['service']->latestCommit('coygg/meta-capi-gateway', 'main');
+            } elseif ($case['method'] === 'latest_bad_repo') {
+                $case['service']->latestCommit('https://example.com/coygg/meta-capi-gateway', 'main');
+            } elseif ($case['method'] === 'latest_missing_repo') {
+                $case['service']->latestCommit('https://github.com/coygg', 'main');
+            } elseif ($case['method'] === 'deploy_empty') {
+                $case['service']->triggerDeploy('');
+            } elseif ($case['method'] === 'deploy_bad_url') {
+                $case['service']->triggerDeploy('http://example.com/hook');
+            } else {
+                $case['service']->triggerDeploy('https://api.render.com/deploy/srv-demo?key=secret');
+            }
+            $test->assertTrue(false, $case['message']);
+        } catch (RuntimeException) {
+            $test->assertTrue(true, $case['message']);
+        }
+    }
+
     $campaignRepo = new CampaignRepository($database->pdo());
     $_SESSION = ['admin_authenticated' => true];
-    $emptyAdmin = new AdminController($config, $adminRepo, $domainRepo, $campaignRepo);
+    $emptyAdmin = new AdminController($config, $adminRepo, $domainRepo, $campaignRepo, $updateRepo, $updateService);
     $database->pdo()->exec('UPDATE admin_users SET walkthrough_completed_at = NULL');
     $emptyDashboard = $emptyAdmin->handle('GET', '/admin');
     $test->assertContains('Quick setup walkthrough', $responseBody($emptyDashboard), 'admin dashboard renders first-run walkthrough');
     $test->assertContains('No campaigns yet.', $responseBody($emptyDashboard), 'admin dashboard handles empty campaign database');
+    $test->assertContains('Updates', $responseBody($emptyDashboard), 'admin dashboard renders update panel');
     $adminRepo->completeWalkthrough();
     $hiddenWalkthroughDashboard = $emptyAdmin->handle('GET', '/admin');
     $test->assertTrue(!str_contains($responseBody($hiddenWalkthroughDashboard), 'Quick setup walkthrough'), 'admin dashboard hides completed walkthrough');
     $newCampaignResponse = $emptyAdmin->handle('GET', '/admin/campaigns/new');
     $test->assertContains('href="/admin">Cancel</a>', $responseBody($newCampaignResponse), 'admin campaign form renders cancel link');
+    $_SESSION = ['admin_authenticated' => true, '_csrf' => 'unit-csrf'];
+    $_POST = [
+        '_csrf' => 'unit-csrf',
+        'repo_url' => 'coygg/meta-capi-gateway',
+        'branch' => 'main',
+        'deploy_hook_url' => 'https://api.render.com/deploy/srv-demo?key=secret',
+    ];
+    $test->assertSame(302, $responseStatus($emptyAdmin->handle('POST', '/admin/updates/settings')), 'admin can save update settings');
+    $test->assertSame('https://api.render.com/deploy/srv-demo?key=secret', $updateRepo->settings()['deploy_hook_url'], 'admin update settings save persists deploy hook');
+    $_POST = [
+        '_csrf' => 'unit-csrf',
+        'repo_url' => 'coygg/meta-capi-gateway',
+        'branch' => 'main',
+        'deploy_hook_url' => '',
+    ];
+    $test->assertSame(302, $responseStatus($emptyAdmin->handle('POST', '/admin/updates/settings')), 'admin update settings keep deploy hook when field is blank');
+    $test->assertSame('https://api.render.com/deploy/srv-demo?key=secret', $updateRepo->settings()['deploy_hook_url'], 'blank deploy hook field preserves existing secret');
+    $_POST = [
+        '_csrf' => 'unit-csrf',
+        'repo_url' => 'coygg/meta-capi-gateway',
+        'branch' => 'main',
+        'deploy_hook_url' => '',
+        'clear_deploy_hook' => '1',
+    ];
+    $test->assertSame(302, $responseStatus($emptyAdmin->handle('POST', '/admin/updates/settings')), 'admin update settings can clear deploy hook');
+    $test->assertSame('', $updateRepo->settings()['deploy_hook_url'], 'clear checkbox removes existing deploy hook');
+    $_POST = [
+        '_csrf' => 'unit-csrf',
+        'repo_url' => 'coygg/meta-capi-gateway',
+        'branch' => 'main',
+        'deploy_hook_url' => 'https://api.render.com/deploy/srv-demo?key=secret',
+    ];
+    $emptyAdmin->handle('POST', '/admin/updates/settings');
+    $_POST = ['_csrf' => 'unit-csrf', 'repo_url' => 'not-a-url', 'branch' => 'main', 'deploy_hook_url' => ''];
+    $test->assertSame(302, $responseStatus($emptyAdmin->handle('POST', '/admin/updates/settings')), 'admin update settings validation redirects with flash');
+    $_POST = ['_csrf' => 'unit-csrf'];
+    $test->assertSame(302, $responseStatus($emptyAdmin->handle('POST', '/admin/updates/check')), 'admin can check for updates');
+    $test->assertSame(str_repeat('b', 40), $updateRepo->settings()['latest_commit_sha'], 'admin update check stores latest commit');
+    putenv('APP_VERSION=' . str_repeat('b', 40));
+    $matchingVersionConfig = Config::load($root);
+    putenv('APP_VERSION');
+    $matchingVersionAdmin = new AdminController($matchingVersionConfig, $adminRepo, $domainRepo, $campaignRepo, $updateRepo, $updateService);
+    $test->assertSame(302, $responseStatus($matchingVersionAdmin->handle('POST', '/admin/updates/check')), 'admin update check recognizes the current version when exposed');
+    $versionedDashboard = $matchingVersionAdmin->handle('GET', '/admin');
+    $test->assertContains(substr(str_repeat('b', 40), 0, 12), $responseBody($versionedDashboard), 'admin update panel renders exposed current version');
+    $test->assertSame(302, $responseStatus($emptyAdmin->handle('POST', '/admin/updates/deploy')), 'admin can trigger deploy hook');
+    $test->assertSame('HTTP 202', $updateRepo->settings()['last_deploy_status'], 'admin deploy action stores deploy result');
+    $errorAdmin = new AdminController($config, $adminRepo, $domainRepo, $campaignRepo, $updateRepo, new UpdateService(static fn (): array => ['status' => 500, 'body' => '{}']));
+    $test->assertSame(302, $responseStatus($errorAdmin->handle('POST', '/admin/updates/check')), 'admin update check handles provider errors');
+    $test->assertSame(302, $responseStatus($errorAdmin->handle('POST', '/admin/updates/deploy')), 'admin deploy handles provider errors');
     $_SESSION = [];
+    $_POST = [];
 
     $previousServer = $_SERVER;
     $previousGet = $_GET;

@@ -7,6 +7,8 @@ namespace Gateway;
 use Gateway\Services\AdminRepository;
 use Gateway\Services\CampaignRepository;
 use Gateway\Services\DomainRepository;
+use Gateway\Services\UpdateRepository;
+use Gateway\Services\UpdateService;
 use Gateway\Support\Response;
 
 final class AdminController
@@ -16,6 +18,8 @@ final class AdminController
         private readonly AdminRepository $admins,
         private readonly DomainRepository $domains,
         private readonly CampaignRepository $campaigns,
+        private readonly UpdateRepository $updates,
+        private readonly UpdateService $updateService,
     ) {
     }
 
@@ -54,6 +58,18 @@ final class AdminController
 
         if ($method === 'POST' && $path === '/admin/domains') {
             return $this->domainAdd();
+        }
+
+        if ($method === 'POST' && $path === '/admin/updates/settings') {
+            return $this->updateSettingsSave();
+        }
+
+        if ($method === 'POST' && $path === '/admin/updates/check') {
+            return $this->updateCheck();
+        }
+
+        if ($method === 'POST' && $path === '/admin/updates/deploy') {
+            return $this->updateDeploy();
         }
 
         if ($method === 'POST' && preg_match('#^/admin/domains/(\d+)/verify$#', $path, $match) === 1) {
@@ -227,6 +243,7 @@ final class AdminController
             . '<table><thead><tr><th>Hostname</th><th>Status</th><th>DNS target</th><th>Last check</th><th></th></tr></thead><tbody>' . $domainRows . '</tbody></table></section>'
             . '<section><div class="split"><h2>Campaigns</h2><a class="button" href="/admin/campaigns/new">New campaign</a></div>'
             . '<table><thead><tr><th>Slug</th><th>Status</th><th>Meta ad URL</th><th></th></tr></thead><tbody>' . $campaignRows . '</tbody></table></section>'
+            . $this->updatesPanel()
             . '<form method="post" action="/admin/logout">' . $this->csrfField() . '<button type="submit" class="link">Log out</button></form>';
 
         return Response::html($this->layout('Admin', $body));
@@ -274,6 +291,71 @@ final class AdminController
         $this->assertCsrf();
         $this->domains->delete($id);
         $this->flash('Domain deleted.');
+
+        return Response::redirect('/admin');
+    }
+
+    private function updateSettingsSave(): Response
+    {
+        $this->assertCsrf();
+
+        try {
+            $existing = $this->updates->settings();
+            $deployHookUrl = trim((string) ($_POST['deploy_hook_url'] ?? ''));
+
+            if ($deployHookUrl === '' && (string) ($_POST['clear_deploy_hook'] ?? '') !== '1') {
+                $deployHookUrl = $existing['deploy_hook_url'];
+            }
+
+            $this->updates->saveSettings(
+                (string) ($_POST['repo_url'] ?? ''),
+                (string) ($_POST['branch'] ?? ''),
+                $deployHookUrl,
+            );
+            $this->flash('Update settings saved.');
+        } catch (\Throwable $error) {
+            $this->flash($error->getMessage());
+        }
+
+        return Response::redirect('/admin');
+    }
+
+    private function updateCheck(): Response
+    {
+        $this->assertCsrf();
+        $settings = $this->updates->settings();
+
+        try {
+            $latest = $this->updateService->latestCommit($settings['repo_url'], $settings['branch']);
+            $this->updates->markLatestCommit($latest['sha'], $latest['url']);
+            $current = $this->currentVersion();
+            $message = 'Latest GitHub commit is ' . $latest['short_sha'] . '.';
+
+            if ($current !== '' && str_starts_with($latest['sha'], $current)) {
+                $message = 'This deployment already appears to be on ' . $latest['short_sha'] . '.';
+            }
+
+            $this->flash($message);
+        } catch (\Throwable $error) {
+            $this->flash($error->getMessage());
+        }
+
+        return Response::redirect('/admin');
+    }
+
+    private function updateDeploy(): Response
+    {
+        $this->assertCsrf();
+        $settings = $this->updates->settings();
+
+        try {
+            $result = $this->updateService->triggerDeploy($settings['deploy_hook_url']);
+            $this->updates->markDeployTriggered($result['status']);
+            $this->flash('Update deploy started. Your host will rebuild the app from the configured Git branch.');
+        } catch (\Throwable $error) {
+            $this->updates->markDeployFailed($error->getMessage());
+            $this->flash($error->getMessage());
+        }
 
         return Response::redirect('/admin');
     }
@@ -378,6 +460,45 @@ final class AdminController
         return '<div class="notice">' . $this->e($message) . '</div>';
     }
 
+    private function updatesPanel(): string
+    {
+        $settings = $this->updates->settings();
+        $currentVersion = $this->currentVersion();
+        $deployHookStatus = $settings['deploy_hook_url'] === '' ? 'Not configured' : 'Configured';
+        $latest = $settings['latest_commit_sha'] === ''
+            ? 'Not checked yet'
+            : '<a href="' . $this->e($settings['latest_commit_url']) . '">' . $this->e(substr($settings['latest_commit_sha'], 0, 7)) . '</a>';
+        $checked = $settings['latest_checked_at'] === '' ? 'Never' : $this->e($settings['latest_checked_at']);
+        $lastDeploy = $settings['last_deploy_triggered_at'] === ''
+            ? 'Never'
+            : $this->e($settings['last_deploy_triggered_at'] . ' (' . $settings['last_deploy_status'] . ')');
+
+        return '<section><h2>Updates</h2>'
+            . '<p>Save your platform deploy hook once, then use this panel to check GitHub and redeploy this service when new commits are available.</p>'
+            . '<dl class="meta">'
+            . '<div><dt>Current version</dt><dd><code>' . $this->e($currentVersion === '' ? 'Not exposed by host' : substr($currentVersion, 0, 12)) . '</code></dd></div>'
+            . '<div><dt>Latest checked commit</dt><dd>' . $latest . '</dd></div>'
+            . '<div><dt>Last checked</dt><dd>' . $checked . '</dd></div>'
+            . '<div><dt>Deploy hook</dt><dd>' . $this->e($deployHookStatus) . '</dd></div>'
+            . '<div><dt>Last deploy request</dt><dd>' . $lastDeploy . '</dd></div>'
+            . '</dl>'
+            . '<form method="post" action="/admin/updates/settings" class="stack">' . $this->csrfField()
+            . $this->input('repo_url', 'GitHub repository URL', $settings['repo_url'])
+            . $this->input('branch', 'Branch to deploy', $settings['branch'])
+            . $this->input('deploy_hook_url', 'Deploy hook URL', '', false, false, 'Paste the HTTPS deploy hook from Render or your hosting provider. Leave blank to keep the existing hook.')
+            . '<label class="check"><input type="checkbox" name="clear_deploy_hook" value="1"> Clear stored deploy hook</label>'
+            . '<div><button type="submit">Save update settings</button></div></form>'
+            . '<div class="actions update-actions">'
+            . $this->postButton('/admin/updates/check', 'Check GitHub')
+            . $this->postButton('/admin/updates/deploy', 'Deploy latest commit', 'secondary')
+            . '</div></section>';
+    }
+
+    private function currentVersion(): string
+    {
+        return trim($this->config->string('version'));
+    }
+
     private function walkthrough(): string
     {
         if ($this->admins->walkthroughCompleted()) {
@@ -394,6 +515,7 @@ final class AdminController
             . '<li><strong>Verify DNS.</strong> Click Verify after DNS is live so generated ad URLs use the tracking domain automatically.</li>'
             . '<li><strong>Create a campaign.</strong> Enter the static lander URL, Remedora form URL, fallback redirect URL, and allowed lander/form domains.</li>'
             . '<li><strong>Copy the Meta ad URL.</strong> Paste the generated URL into Meta so ad clicks arrive with expanded ad IDs, UTMs, and <code>fbclid</code>.</li>'
+            . '<li><strong>Configure updates.</strong> Add your hosting deploy hook in Updates so future GitHub changes can be deployed from this portal.</li>'
             . '<li><strong>Keep Remedora CAPI on.</strong> This gateway only preserves attribution; Remedora sends conversion events directly to Meta.</li>'
             . '</ol></section>';
     }
@@ -493,10 +615,13 @@ final class AdminController
             . '<button type="submit" class="' . $this->e($class) . '">' . $this->e($label) . '</button></form>';
     }
 
-    private function input(string $name, string $label, string $value, bool $readonly = false): string
+    private function input(string $name, string $label, string $value, bool $readonly = false, bool $required = true, string $help = ''): string
     {
+        $helpHtml = $help === '' ? '' : '<small>' . $this->e($help) . '</small>';
+
         return '<label>' . $this->e($label)
-            . '<input name="' . $this->e($name) . '" value="' . $this->e($value) . '"' . ($readonly ? ' readonly' : '') . ' required></label>';
+            . '<input name="' . $this->e($name) . '" value="' . $this->e($value) . '"' . ($readonly ? ' readonly' : '') . ($required ? ' required' : '') . '>'
+            . $helpHtml . '</label>';
     }
 
     /**
@@ -546,6 +671,7 @@ final class AdminController
                 .inline { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
                 .split { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
                 .actions { display: flex; gap: 8px; }
+                .update-actions { margin-top: 14px; }
                 .notice { border: 1px solid #d8c785; background: #fff7d6; padding: 12px; border-radius: 6px; margin-bottom: 18px; }
                 .pill { display: inline-block; background: #e9f0f5; border-radius: 999px; padding: 3px 8px; font-size: 13px; }
                 .narrow { max-width: 460px; margin: 7vh auto; }
@@ -553,6 +679,13 @@ final class AdminController
                 .walkthrough p { margin-bottom: 0; color: #51616f; }
                 .steps { margin: 18px 0 0; padding-left: 22px; }
                 .steps li { margin: 10px 0; line-height: 1.5; }
+                .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 0 0 18px; }
+                .meta div { border: 1px solid #e3e9ed; border-radius: 6px; padding: 10px; }
+                .meta dt { font-weight: 700; color: #51616f; font-size: 13px; }
+                .meta dd { margin: 5px 0 0; overflow-wrap: anywhere; }
+                small { display: block; color: #51616f; margin-top: 5px; font-weight: 400; }
+                .check { display: flex; gap: 8px; align-items: center; font-weight: 700; }
+                .check input { width: auto; margin: 0; }
             </style>
         </head>
         <body>

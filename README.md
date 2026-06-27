@@ -1,5 +1,7 @@
 # Meta Attribution Gateway
 
+[![CI](https://github.com/coygg/meta-capi-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/coygg/meta-capi-gateway/actions/workflows/ci.yml)
+
 PHP 8.2+ gateway for Remedora-style Meta ad funnels. It protects the downstream intake form URL from copied or Ad Library-stripped links while preserving the attribution params Remedora needs for its own direct Meta CAPI setup.
 
 This app does **not** send CAPI events to Meta. Keep Remedora's built-in CAPI enabled and let Remedora send conversions directly.
@@ -231,9 +233,13 @@ Use `AAAA` only when your server has IPv6. The admin portal shows the expected D
 ## Tests
 
 ```bash
+composer lint
+composer test:unit
 composer test
-composer test:coverage
+composer test:coverage -- --missing
 ```
+
+CI runs Composer validation, PHP linting, unit tests, and the full suite with a 100% coverage gate.
 
 The E2E test simulates:
 

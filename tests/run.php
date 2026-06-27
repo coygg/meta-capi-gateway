@@ -9,7 +9,31 @@ require $root . '/tests/TestHarness.php';
 require $root . '/tests/UnitTests.php';
 require $root . '/tests/E2ETests.php';
 
-$coverageEnabled = extension_loaded('pcov') && in_array('--coverage', $argv, true);
+$coverageRequested = in_array('--coverage', $argv, true);
+$coverageEnabled = $coverageRequested;
+$coverageFailed = false;
+$unitOnly = in_array('--unit', $argv, true);
+$e2eOnly = in_array('--e2e', $argv, true);
+$minCoverage = null;
+
+foreach ($argv as $arg) {
+    if (str_starts_with($arg, '--min-coverage=')) {
+        $minCoverage = (float) substr($arg, strlen('--min-coverage='));
+    }
+}
+
+if ($unitOnly && $e2eOnly) {
+    fwrite(STDERR, "Use only one of --unit or --e2e.\n");
+    exit(1);
+}
+
+if ($coverageRequested && !extension_loaded('pcov')) {
+    fwrite(STDERR, "Coverage requires the pcov extension.\n");
+    exit(1);
+}
+
+$runUnit = !$e2eOnly;
+$runE2e = !$unitOnly;
 
 if ($coverageEnabled) {
     pcov\start();
@@ -17,15 +41,22 @@ if ($coverageEnabled) {
 
 $test = new TestHarness();
 
-run_unit_tests($test, $root);
-run_e2e_tests($test, $root);
+if ($runUnit) {
+    run_unit_tests($test, $root);
+}
+
+if ($runE2e) {
+    run_e2e_tests($test, $root);
+}
 
 $coverage = [];
 
 if ($coverageEnabled) {
     pcov\stop();
     $coverage = pcov\collect(pcov\all);
-    $coverage = merge_coverage($coverage, collect_child_coverage($root . '/tests/.runtime/e2e/coverage'));
+    if ($runE2e) {
+        $coverage = merge_coverage($coverage, collect_child_coverage($root . '/tests/.runtime/e2e/coverage'));
+    }
     $report = coverage_report($coverage, $root . '/src');
     echo "\nCoverage\n";
     echo sprintf(
@@ -48,11 +79,16 @@ if ($coverageEnabled) {
             echo '    missing: ' . implode(', ', $stats['missing']) . "\n";
         }
     }
+
+    if ($minCoverage !== null && $report['percent'] + 0.00001 < $minCoverage) {
+        $coverageFailed = true;
+        echo sprintf("Coverage below required minimum: %0.2f%% < %0.2f%%\n", $report['percent'], $minCoverage);
+    }
 }
 
 echo "\nAssertions: " . $test->assertions() . "\n";
 
-if ($test->failures() > 0) {
+if ($test->failures() > 0 || $coverageFailed) {
     echo $test->failures() . " failure(s)\n";
     exit(1);
 }

@@ -16,6 +16,7 @@ The gateway only protects routing and preserves attribution parameters until the
 - Sends valid ad clicks to a static lander with a signed `cid`.
 - Sends lander CTA clicks through `/start`, then redirects to Remedora with `sid`, `cid`, `gateway_cid`, `fbclid`, ad IDs, and UTMs preserved.
 - Provides a first-run admin setup, domain portal, and campaign editor.
+- Lets you change the destination form URL at any time from `/admin`; changes apply immediately without redeploying or recreating the campaign.
 
 ## Flow
 
@@ -207,6 +208,16 @@ https://track.yourdomain.com/start?cid=<cid from lander URL>
 
 Remedora receives those query params, stores its own attribution context, and sends CAPI directly to Meta when the intake converts.
 
+## Changing The Destination URL
+
+The destination form URL entered during first-run setup is not fixed. Open `/admin`, click **Edit** next to the campaign, change **Destination form URL**, and save. There is no need to destroy the deployment or recreate the campaign:
+
+- The change applies immediately, including to visitors who already clicked the ad and hold a valid `cid` or an open form session; their `/start` handoff uses the new destination.
+- Saving a campaign automatically adds the lander and destination form hosts to the allowed-domain list, so pointing the campaign at a brand-new domain works without editing the list by hand.
+- The static lander URL and fallback redirect URL can be changed the same way.
+
+`config/campaigns.php` only seeds campaigns whose slug is not in the database yet (the shipped campaign on first boot). It never updates an existing campaign, so the `/admin` campaign editor is the source of truth after seeding, and invalid entries in the config file are skipped instead of breaking the app.
+
 ## Fallback Redirects
 
 Each campaign has a **Fallback redirect URL for ineligible traffic**. This is where the gateway sends visitors when the click is missing required expanded Meta parameters or still contains unexpanded macros like `{{ad.id}}`.
@@ -219,7 +230,7 @@ https://www.google.com/
 https://yourbrand.com/general-info
 ```
 
-The fallback URL can be external. You do not need to add the fallback host to **Allowed lander and form redirect domains**; the gateway automatically allows the configured fallback URL for ineligible-click redirects. The allowed-domain list still protects the static lander and Remedora form redirects.
+The fallback URL can be external. You do not need to add the fallback host to **Allowed redirect domains**; the gateway automatically allows the configured fallback URL for ineligible-click redirects. Saving a campaign adds the lander and destination form hosts to the list automatically, so the list only ever needs manual entries for extra hosts.
 
 The eligibility check is not a Facebook login or cryptographic proof from Meta. It is based on whether Meta expanded the ad URL parameters configured for the campaign. The default required parameters are:
 
@@ -276,7 +287,7 @@ The E2E test simulates:
 ## Notes
 
 - Keep fallback copy aligned with the Facebook ad copy.
-- Put the real Remedora form URL only in the protected campaign config.
+- Put the real Remedora form URL only in the protected campaign editor at `/admin`; the campaign config file is just a first-boot seed.
 - Do not send PHI through this gateway.
 - Rotate `APP_SECRET` only if you are comfortable invalidating outstanding signed `cid` and `sid` tokens.
 - This app is a routing and attribution-preservation gateway. Remedora remains the system that sends conversion events to Meta.

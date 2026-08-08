@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+// This file only seeds campaigns whose slug is not in the database yet (the shipped
+// campaign on first boot). It never updates an existing campaign, so after seeding
+// the /admin editor is the source of truth: every URL, including the destination
+// form URL, can be changed there at any time without redeploying or recreating
+// anything. Invalid entries in this file are skipped rather than breaking the app.
+
 $baseUrl = rtrim((string) (getenv('APP_BASE_URL') ?: getenv('RENDER_EXTERNAL_URL') ?: 'http://127.0.0.1:8080'), '/');
 
 return [
@@ -11,7 +17,8 @@ return [
         // This is the public/static intake lander. It should match the ad copy.
         'landing_url' => $baseUrl . '/intake/weight-intake',
 
-        // This is the protected telehealth form start URL. Replace for production.
+        // This is the destination form start URL used for the first boot only.
+        // Change it later in the /admin campaign editor.
         'form_url' => 'https://telehealth.example.com/intake/start',
 
         // This page keeps the Facebook copy intact but does not expose the form flow.

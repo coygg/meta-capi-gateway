@@ -462,6 +462,12 @@ function run_unit_tests(TestHarness $test, string $root): void
     $test->assertSame('unit-click-token', $forwardParams['cid'] ?? null, 'form redirect includes click token fallback');
     $test->assertSame('unit-keyword', $forwardParams['utm_term'] ?? null, 'form redirect can forward UTM term from raw query');
 
+    $test->assertSame(
+        [],
+        $callAppPrivate($fallbackConfigApp, 'allowedDomains', ['allowed_domains' => 'bad-config']),
+        'malformed allowed domains fail closed as an empty list'
+    );
+
     $campaignRepo->seedFromConfig($config->campaigns());
     $_SESSION = ['admin_authenticated' => true];
     $seededDashboard = $emptyAdmin->handle('GET', '/admin');
@@ -470,6 +476,46 @@ function run_unit_tests(TestHarness $test, string $root): void
     $campaignRepo->seedFromConfig($config->campaigns());
     $test->assertTrue(count($campaignRepo->all()) >= 1, 'campaign repository seeds config campaigns');
     $test->assertTrue($campaignRepo->findActive('weight-intake') !== null, 'campaign repository returns active campaign');
+
+    $editedSeed = $campaignRepo->findBySlug('weight-intake');
+    $editedSeed['form_url'] = 'https://changed-destination.example.com/intake/start';
+    $campaignRepo->save($editedSeed);
+    $campaignRepo->seedFromConfig($config->campaigns());
+    $campaignRepo->seedFromConfig(['WEIGHT-INTAKE' => $config->campaign('weight-intake')]);
+    $campaignRepo->seedFromConfig([' weight-intake ' => $config->campaign('weight-intake')]);
+    $test->assertSame(
+        'https://changed-destination.example.com/intake/start',
+        $campaignRepo->findBySlug('weight-intake')['form_url'] ?? null,
+        'admin-edited destination survives config re-seeding, including case and whitespace key variants'
+    );
+    $test->assertTrue(
+        in_array('changed-destination.example.com', $campaignRepo->findBySlug('weight-intake')['allowed_domains'] ?? [], true),
+        'saving a changed destination auto-allows its host'
+    );
+    $seededCount = count($campaignRepo->all());
+    $campaignRepo->seedFromConfig(['bad slug!' => ['landing_url' => 'not-a-url']]);
+    $campaignRepo->seedFromConfig(['scalar-entry' => 'https://forms.example.com/intake/start']);
+    $test->assertSame($seededCount, count($campaignRepo->all()), 'invalid config entries are skipped without breaking seeding');
+    $test->assertSame(null, $campaignRepo->findBySlug('scalar-entry'), 'scalar config entries are skipped without crashing every route');
+
+    $normalizedAppend = $campaignRepo->normalize([
+        'slug' => 'append-hosts',
+        'status' => 'active',
+        'landing_url' => 'https://landers.example.net/offer',
+        'form_url' => 'https://forms.example.org/intake/start',
+        'public_fallback_url' => 'https://elsewhere.example.com/info',
+        'allowed_domains' => ['forms.example.org', 'extra.example.com'],
+    ]);
+    $test->assertSame(
+        ['forms.example.org', 'extra.example.com', 'landers.example.net'],
+        $normalizedAppend['allowed_domains'],
+        'saving auto-allows lander and destination form hosts without duplicates'
+    );
+    $test->assertSame(
+        false,
+        in_array('elsewhere.example.com', $normalizedAppend['allowed_domains'], true),
+        'fallback host is allowed at redirect time, not stored in the allowlist'
+    );
     $test->assertSame(null, $campaignRepo->findById(9999), 'missing campaign id returns null');
     $test->assertSame(null, $campaignRepo->findActive('missing-campaign'), 'missing active campaign returns null');
     $pausedCampaign = [
@@ -521,6 +567,17 @@ function run_unit_tests(TestHarness $test, string $root): void
         $test->assertTrue(false, 'campaign repository rejects invalid campaign URL');
     } catch (InvalidArgumentException) {
         $test->assertTrue(true, 'campaign repository rejects invalid campaign URL');
+    }
+    try {
+        $campaignRepo->normalize([
+            'slug' => 'valid-slug',
+            'landing_url' => 'https://example.com/lander',
+            'form_url' => 'mailto:intake@example.com',
+            'public_fallback_url' => 'https://example.com/fallback',
+        ]);
+        $test->assertTrue(false, 'campaign repository rejects non-web destination URLs');
+    } catch (InvalidArgumentException) {
+        $test->assertTrue(true, 'campaign repository rejects non-web destination URLs');
     }
 
     Env::load($root . '/does-not-exist.env');

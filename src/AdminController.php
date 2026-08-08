@@ -225,12 +225,13 @@ final class AdminController
                 . '<td>' . $this->e((string) $campaign['slug']) . '</td>'
                 . '<td><span class="pill">' . $this->e((string) $campaign['status']) . '</span></td>'
                 . '<td><code>' . $this->e($adUrl) . '</code></td>'
+                . '<td><code>' . $this->e((string) $campaign['form_url']) . '</code></td>'
                 . '<td><a class="button" href="/admin/campaigns/' . (int) $campaign['id'] . '/edit">Edit</a></td>'
                 . '</tr>';
         }
 
         if ($campaignRows === '') {
-            $campaignRows = '<tr><td colspan="4">No campaigns yet.</td></tr>';
+            $campaignRows = '<tr><td colspan="5">No campaigns yet.</td></tr>';
         }
 
         $body = $flash
@@ -242,7 +243,7 @@ final class AdminController
             . '<button type="submit">Add domain</button></form>'
             . '<table><thead><tr><th>Hostname</th><th>Status</th><th>DNS target</th><th>Last check</th><th></th></tr></thead><tbody>' . $domainRows . '</tbody></table></section>'
             . '<section><div class="split"><h2>Campaigns</h2><a class="button" href="/admin/campaigns/new">New campaign</a></div>'
-            . '<table><thead><tr><th>Slug</th><th>Status</th><th>Meta ad URL</th><th></th></tr></thead><tbody>' . $campaignRows . '</tbody></table></section>'
+            . '<table><thead><tr><th>Slug</th><th>Status</th><th>Meta ad URL</th><th>Destination form URL</th><th></th></tr></thead><tbody>' . $campaignRows . '</tbody></table></section>'
             . $this->updatesPanel()
             . '<form method="post" action="/admin/logout">' . $this->csrfField() . '<button type="submit" class="link">Log out</button></form>';
 
@@ -375,9 +376,9 @@ final class AdminController
             . $this->input('slug', 'Slug', (string) $campaign['slug'], $isEdit)
             . $this->select('status', 'Status', (string) $campaign['status'], ['active' => 'Active', 'paused' => 'Paused'])
             . $this->input('landing_url', 'Static lander URL', (string) $campaign['landing_url'])
-            . $this->input('form_url', 'Telehealth form URL', (string) $campaign['form_url'])
+            . $this->input('form_url', 'Destination form URL', (string) $campaign['form_url'], false, true, 'Where eligible visitors are sent from /start, such as the Remedora intake form. You can change this at any time; saving applies immediately without recreating the campaign.')
             . $this->input('public_fallback_url', 'Fallback redirect URL for ineligible traffic', (string) $campaign['public_fallback_url'])
-            . $this->textarea('allowed_domains', 'Allowed lander and form redirect domains', implode("\n", $campaign['allowed_domains']))
+            . $this->textarea('allowed_domains', 'Allowed redirect domains', implode("\n", $campaign['allowed_domains']), 'Hosts this campaign may redirect to. The lander and destination form hosts are added automatically when you save, and the fallback URL is always allowed, so changing any URL never requires editing this list by hand.')
             . $this->textarea('required_params', 'Required Meta params', implode("\n", $campaign['required_params']))
             . $this->textarea('accepted_utm_sources', 'Accepted UTM sources', implode("\n", $campaign['accepted_utm_sources']))
             . $this->input('click_token_ttl_seconds', 'Click token TTL seconds', (string) $campaign['click_token_ttl_seconds'])
@@ -513,7 +514,7 @@ final class AdminController
             . '<li><strong>Add a tracking domain.</strong> Use the HTTPS host visitors will click, such as <code>track.yourdomain.com</code>.</li>'
             . '<li><strong>Point DNS.</strong> Use a CNAME for platform aliases, or an A/AAAA record when self-hosting this exact domain with Caddy.</li>'
             . '<li><strong>Verify DNS.</strong> Click Verify after DNS is live so generated ad URLs use the tracking domain automatically.</li>'
-            . '<li><strong>Create a campaign.</strong> Enter the static lander URL, Remedora form URL, fallback redirect URL, and allowed lander/form domains.</li>'
+            . '<li><strong>Create a campaign.</strong> Enter the static lander URL, Remedora form URL, and fallback redirect URL. Every URL, including the destination form URL, can be changed later from Edit without recreating the campaign.</li>'
             . '<li><strong>Copy the Meta ad URL.</strong> Paste the generated URL into Meta so ad clicks arrive with expanded ad IDs, UTMs, and <code>fbclid</code>.</li>'
             . '<li><strong>Configure updates.</strong> Add your hosting deploy hook in Updates so future GitHub changes can be deployed from this portal.</li>'
             . '<li><strong>Keep Remedora CAPI on.</strong> This gateway only preserves attribution; Remedora sends conversion events directly to Meta.</li>'
@@ -637,10 +638,13 @@ final class AdminController
         return $html . '</select></label>';
     }
 
-    private function textarea(string $name, string $label, string $value): string
+    private function textarea(string $name, string $label, string $value, string $help = ''): string
     {
+        $helpHtml = $help === '' ? '' : '<small>' . $this->e($help) . '</small>';
+
         return '<label>' . $this->e($label)
-            . '<textarea name="' . $this->e($name) . '" rows="4">' . $this->e($value) . '</textarea></label>';
+            . '<textarea name="' . $this->e($name) . '" rows="4">' . $this->e($value) . '</textarea>'
+            . $helpHtml . '</label>';
     }
 
     private function layout(string $title, string $body, int $status = 200): string

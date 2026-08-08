@@ -284,6 +284,50 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $test->assertSame(302, $portalFallback['status'], 'portal-created DB campaign redirects ineligible click');
         $test->assertSame('https://google.com/', header_value($portalFallback, 'location'), 'campaign fallback can point to an external URL without adding it to allowed domains');
 
+        $preChangeClick = http_request('GET', $gatewayBase . '/c/portal-intake?ad_id=pre-ad&adset_id=pre-set&campaign_id=pre-camp&utm_source=facebook&fbclid=pre-fbclid');
+        $test->assertSame(302, $preChangeClick['status'], 'click recorded before a destination change stays valid');
+        $preChangeCid = query_params(header_value($preChangeClick, 'location'))['cid'] ?? '';
+        $test->assertTrue($preChangeCid !== '', 'pre-change click receives signed cid');
+
+        $preChangeStart = http_request('GET', $gatewayBase . '/start?cid=' . rawurlencode($preChangeCid));
+        $test->assertSame(302, $preChangeStart['status'], 'pre-change start opens a form session at the original destination');
+        $test->assertContains($telehealthBase . '/intake/start', header_value($preChangeStart, 'location'), 'pre-change handoff points at the original destination');
+        $preChangeSid = query_params(header_value($preChangeStart, 'location'))['sid'] ?? '';
+
+        $retargetForm = http_request('GET', $gatewayBase . '/admin/campaigns/' . $campaignId . '/edit', ['Cookie' => $adminCookie]);
+        $test->assertContains('Destination form URL', $retargetForm['body'], 'edit campaign form labels the destination form URL');
+        $test->assertContains('without recreating the campaign', $retargetForm['body'], 'edit campaign form explains the destination is changeable');
+        $retargetPayload = array_merge($campaignPayload, [
+            '_csrf' => csrf_from_body($retargetForm['body']),
+            'landing_url' => 'http://localhost:' . $gatewayPort . '/intake/portal-intake',
+            'form_url' => 'http://localhost:' . $telehealthPort . '/intake/start',
+            'allowed_domains' => '127.0.0.1',
+        ]);
+        $retargetSave = http_request(
+            'POST',
+            $gatewayBase . '/admin/campaigns/' . $campaignId,
+            ['Content-Type' => 'application/x-www-form-urlencoded', 'Cookie' => $adminCookie],
+            http_build_query($retargetPayload)
+        );
+        $test->assertSame(302, $retargetSave['status'], 'admin can change the destination URL after first-run setup');
+
+        $dashboardAfterRetarget = http_request('GET', $gatewayBase . '/admin', ['Cookie' => $adminCookie]);
+        $test->assertContains('http://localhost:' . $telehealthPort . '/intake/start', $dashboardAfterRetarget['body'], 'dashboard shows the updated destination form URL');
+
+        $retargetedStart = http_request('GET', $gatewayBase . '/start?cid=' . rawurlencode($preChangeCid));
+        $test->assertSame(302, $retargetedStart['status'], 'start still works for clicks made before the destination change');
+        $test->assertContains('http://localhost:' . $telehealthPort . '/intake/start', header_value($retargetedStart, 'location'), 'in-flight click follows the new destination immediately');
+        $test->assertSame($preChangeSid, query_params(header_value($retargetedStart, 'location'))['sid'] ?? null, 'reused mid-funnel form session keeps its sid while following the new destination');
+
+        $retargetedClick = http_request('GET', $gatewayBase . '/c/portal-intake?ad_id=post-ad&adset_id=post-set&campaign_id=post-camp&utm_source=facebook&fbclid=post-fbclid');
+        $test->assertSame(302, $retargetedClick['status'], 'clicks keep flowing after the destination change');
+        $retargetedLanding = header_value($retargetedClick, 'location');
+        $test->assertContains('http://localhost:' . $gatewayPort . '/intake/portal-intake', $retargetedLanding, 'changed lander host is allowed without editing the domain list');
+        $postChangeCid = query_params($retargetedLanding)['cid'] ?? '';
+        $postChangeStart = http_request('GET', $gatewayBase . '/start?cid=' . rawurlencode($postChangeCid));
+        $test->assertSame(302, $postChangeStart['status'], 'start redirects for clicks made after the destination change');
+        $test->assertContains('http://localhost:' . $telehealthPort . '/intake/start', header_value($postChangeStart, 'location'), 'new destination host is allowed without editing the domain list');
+
         $logout = http_request(
             'POST',
             $gatewayBase . '/admin/logout',
@@ -407,7 +451,8 @@ function run_e2e_tests(TestHarness $test, string $root): void
         $test->assertContains('/fallback/weight-intake', header_value($fallback, 'location'), 'unexpanded macro goes to public fallback');
 
         $badConfig = http_request('GET', $gatewayBase . '/c/bad-domains?ad_id=ad&adset_id=set&campaign_id=camp&utm_source=facebook');
-        $test->assertSame(500, $badConfig['status'], 'bad campaign allowlist fails closed');
+        $test->assertSame(302, $badConfig['status'], 'configured lander stays reachable when the allowlist omits its host');
+        $test->assertContains('/intake/bad-domains', header_value($badConfig, 'location'), 'auto-allowed lander redirect uses the configured landing URL');
 
         $missingCampaign = http_request('GET', $gatewayBase . '/c/missing?ad_id=ad&adset_id=set&campaign_id=camp&utm_source=facebook');
         $test->assertSame(500, $missingCampaign['status'], 'missing campaign fails closed');

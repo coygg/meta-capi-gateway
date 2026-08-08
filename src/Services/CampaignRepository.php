@@ -16,17 +16,27 @@ final class CampaignRepository
     }
 
     /**
+     * Seeds config campaigns whose slug is not in the database yet. Existing rows are
+     * never updated, so the /admin editor stays the source of truth after seeding.
+     *
      * @param array<string, array<string, mixed>> $campaigns
      */
     public function seedFromConfig(array $campaigns): void
     {
         foreach ($campaigns as $slug => $campaign) {
-            if (!is_string($slug) || $this->findBySlug($slug) !== null) {
+            if (!is_string($slug) || !is_array($campaign) || $this->findBySlug(strtolower(trim($slug))) !== null) {
                 continue;
             }
 
             $campaign['slug'] = $slug;
-            $this->save($campaign);
+
+            try {
+                $this->save($campaign);
+            } catch (\InvalidArgumentException) {
+                // One malformed config entry must not take every route down; the
+                // entry stays unseeded until the config file is fixed. Real storage
+                // failures still surface.
+            }
         }
     }
 
@@ -159,10 +169,27 @@ final class CampaignRepository
         $requiredUrls = ['landing_url', 'form_url', 'public_fallback_url'];
         foreach ($requiredUrls as $key) {
             $value = trim((string) ($campaign[$key] ?? ''));
-            if (!filter_var($value, FILTER_VALIDATE_URL)) {
-                throw new \InvalidArgumentException($key . ' must be an absolute URL.');
+            $scheme = strtolower((string) parse_url($value, PHP_URL_SCHEME));
+            $host = (string) parse_url($value, PHP_URL_HOST);
+
+            if (!filter_var($value, FILTER_VALIDATE_URL) || !in_array($scheme, ['http', 'https'], true) || $host === '') {
+                throw new \InvalidArgumentException($key . ' must be an absolute http or https URL.');
             }
+
             $campaign[$key] = $value;
+        }
+
+        $allowedDomains = $this->stringList($campaign['allowed_domains'] ?? []);
+
+        // The lander and destination form hosts are always allowed for their own
+        // redirects, so changing either URL in /admin never requires editing the
+        // allowlist by hand. The fallback host is allowed at redirect time instead.
+        foreach (['landing_url', 'form_url'] as $key) {
+            $host = parse_url((string) $campaign[$key], PHP_URL_HOST);
+
+            if (is_string($host) && $host !== '' && !in_array($host, $allowedDomains, true)) {
+                $allowedDomains[] = $host;
+            }
         }
 
         return [
@@ -172,7 +199,7 @@ final class CampaignRepository
             'landing_url' => (string) $campaign['landing_url'],
             'form_url' => (string) $campaign['form_url'],
             'public_fallback_url' => (string) $campaign['public_fallback_url'],
-            'allowed_domains' => $this->stringList($campaign['allowed_domains'] ?? []),
+            'allowed_domains' => $allowedDomains,
             'required_params' => $this->stringList($campaign['required_params'] ?? ['ad_id', 'adset_id', 'campaign_id', 'utm_source']),
             'accepted_utm_sources' => $this->stringList($campaign['accepted_utm_sources'] ?? ['facebook', 'instagram']),
             'click_token_ttl_seconds' => max(60, (int) ($campaign['click_token_ttl_seconds'] ?? 1800)),

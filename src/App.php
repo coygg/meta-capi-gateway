@@ -101,8 +101,24 @@ final class App
             'click_id' => $clickId,
             'campaign' => $slug,
         ], $ttl);
-        $landingUrl = Url::appendQuery((string) $campaign['landing_url'], [
-            (string) ($campaign['click_token_param'] ?? 'cid') => $token,
+
+        // Forward inbound attribution params (ad_id, adset_id, campaign_id,
+        // utm_*, fbclid, waid/wacid/wasid, etc.) to the landing URL so
+        // downstream pixels (Whop/Meta) can attribute funnel events.
+        // The click token param is always set last and cannot be clobbered.
+        $tokenParam = (string) ($campaign['click_token_param'] ?? 'cid');
+        $forward = [];
+        foreach ($_GET as $key => $value) {
+            if (!is_string($key) || $key === $tokenParam) {
+                continue;
+            }
+            if (is_string($value) || is_numeric($value)) {
+                $forward[$key] = (string) $value;
+            }
+        }
+        $landingUrl = Url::appendQuery((string) $campaign['landing_url'], $forward);
+        $landingUrl = Url::appendQuery($landingUrl, [
+            $tokenParam => $token,
         ]);
 
         Url::assertAllowed($landingUrl, $this->allowedDomains($campaign));

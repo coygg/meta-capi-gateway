@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: meta-attribution-gateway
+    name: newsbreak-attribution-gateway
     runtime: docker
     plan: starter
     region: oregon
